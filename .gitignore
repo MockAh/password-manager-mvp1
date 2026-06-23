@@ -1,0 +1,25 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Bóvedas y secretos — NUNCA subir
+*.vault
+*.db
+*.sqlite
+vault.json
+*.key
+.env
+
+# SO / editor
+.vscode/
+.DS_Store
+Thumbs.db
