@@ -80,6 +80,13 @@ class App(tk.Frame):
             self._lock_btn.pack_forget()
 
     def _lock_and_navigate(self) -> None:
+        """Bloquea la bóveda manualmente y navega a UnlockView.
+
+        Limpia el portapapeles antes de bloquear (FR-022).
+        Refs: US5 Acceptance Scenario 3 — portapapeles borrado al bloquear.
+        """
+        from ui import clipboard
+        clipboard.cancel_clipboard_timer(self.root)
         self.service.lock_vault()
         from ui.views.unlock_view import UnlockView
         self.show_view(UnlockView)
@@ -92,5 +99,12 @@ class App(tk.Frame):
         self.root.after(0, self._navigate_to_unlock_after_autolock)
 
     def _navigate_to_unlock_after_autolock(self) -> None:
+        """Callback del auto-bloqueo ejecutado en el hilo principal de Tk.
+
+        Limpia el portapapeles antes de navegar (FR-022).
+        Refs: US5 Acceptance Scenario 3 — portapapeles borrado al bloquear.
+        """
+        from ui import clipboard
+        clipboard.cancel_clipboard_timer(self.root)
         from ui.views.unlock_view import UnlockView
         self.show_view(UnlockView)

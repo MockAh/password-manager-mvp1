@@ -115,6 +115,15 @@ class EntryFormView(tk.Toplevel):
         )
         self._eye_btn.pack(side=tk.LEFT, padx=(4, 0))
 
+        # Botón "Generar contraseña" — abre GeneratorDialog (US4, T028)
+        tk.Button(
+            pwd_frame,
+            text="Generar",
+            cursor="hand2",
+            relief="flat",
+            command=self._open_generator,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
         # ── URL ───────────────────────────────────────────────────────────────
         tk.Label(container, text="URL", anchor="w").grid(
             row=3, column=0, sticky="w", **pad
@@ -173,6 +182,17 @@ class EntryFormView(tk.Toplevel):
     def _toggle_password_visibility(self) -> None:
         self._password_visible = not self._password_visible
         self._password_entry.config(show="" if self._password_visible else "*")
+
+    def _open_generator(self) -> None:
+        """Abre el diálogo generador de contraseñas.
+
+        Al confirmar, escribe el valor generado en el campo contraseña.
+
+        Refs: T028 (US4), US4 Acceptance Scenario 1 — acceso al generador desde el
+              formulario; Scenario 3 — "Usar esta contraseña" rellena el campo.
+        """
+        from ui.views.generator_dialog import GeneratorDialog
+        GeneratorDialog(self, on_use=self._password_var.set)
 
     def _build_folder_options(self) -> list:
         """Construye lista de (etiqueta, folder_id | None) para el OptionMenu.

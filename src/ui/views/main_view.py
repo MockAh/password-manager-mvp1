@@ -1,4 +1,4 @@
-"""Vista principal — lista de entradas, búsqueda en tiempo real y CRUD (T022, T025).
+"""Vista principal — lista de entradas, búsqueda en tiempo real y CRUD (T022, T025, T030).
 
 Responsabilidades:
   - Mostrar lista de entradas en un Treeview (columnas: Título, Usuario).
@@ -6,11 +6,15 @@ Responsabilidades:
   - Botón "Nueva entrada" → abre EntryFormView en modo creación (US2 Sc1).
   - Doble clic en entrada → abre EntryFormView en modo edición (US2 Sc2).
   - Botón "Eliminar" → confirmación con askyesno → elimina (US2 Sc3–4).
+  - Botones "Copiar usuario" y "Copiar contraseña" para la entrada seleccionada (US5).
+  - Confirmación visual transitoria (≤ 2 s) tras copiar.
   - Refresca la lista tras cada operación CRUD.
 
 Constitución: Principio VII — confirmación antes de eliminar (FR-012).
-Refs: spec.md → US2 Acceptance Scenarios 1–4; US3 Acceptance Scenarios 1–3.
-       FR-013 (búsqueda en tiempo real), SC-003 (≤ 100 ms / 500 entradas).
+Refs: spec.md → US2 Acceptance Scenarios 1–4; US3 Acceptance Scenarios 1–3;
+               US5 Acceptance Scenarios 1–3.
+       FR-013 (búsqueda), FR-015 (copiar), FR-022 (borrado inmediato al bloquear).
+       SC-003 (≤ 100 ms / 500 entradas).
        data-model.md → EntryRecord.
 """
 import tkinter as tk
@@ -74,6 +78,29 @@ class MainView(tk.Frame):
         )
         self._delete_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
+        # Botones copiar (US5, FR-015) — habilitados cuando hay selección
+        self._copy_pwd_btn = tk.Button(
+            action_bar,
+            text="🔑 Copiar contraseña",
+            command=self._copy_password,
+            cursor="hand2",
+            relief="flat",
+            padx=8,
+            state=tk.DISABLED,
+        )
+        self._copy_pwd_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        self._copy_user_btn = tk.Button(
+            action_bar,
+            text="👤 Copiar usuario",
+            command=self._copy_user,
+            cursor="hand2",
+            relief="flat",
+            padx=8,
+            state=tk.DISABLED,
+        )
+        self._copy_user_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
         # ── Barra de búsqueda (US3, FR-013) ───────────────────────────────────
         search_bar = tk.Frame(self)
         search_bar.pack(fill=tk.X, pady=(0, 4))
@@ -119,6 +146,14 @@ class MainView(tk.Frame):
             self,
             text="Sin resultados.",
             fg="gray",
+        )
+
+        # Confirmación visual transitoria tras copiar al portapapeles (US5 Sc1).
+        self._copy_toast = tk.Label(
+            self,
+            text="",
+            fg="#27ae60",
+            font=("" , 9),
         )
 
         # ── Eventos ───────────────────────────────────────────────────────────
@@ -171,14 +206,60 @@ class MainView(tk.Frame):
                 self._empty_label.pack(pady=8)
 
         # Actualizar estado del botón Eliminar
-        self._update_delete_btn()
+        self._update_action_btns()
 
     def _selected_entry_id(self) -> Optional[str]:
         """Devuelve el ID de la entrada seleccionada, o None."""
         sel = self._tree.selection()
         return sel[0] if sel else None
 
+    def _get_selected_entry(self) -> Optional["EntryRecord"]:
+        """Devuelve el EntryRecord completo de la fila seleccionada, o None."""
+        entry_id = self._selected_entry_id()
+        if not entry_id:
+            return None
+        try:
+            return next(
+                (e for e in self._app.service.get_entries() if e.id == entry_id),
+                None,
+            )
+        except Exception:
+            return None
+
     # ── Acciones ─────────────────────────────────────────────────────────────
+
+    def _copy_user(self) -> None:
+        """Copia el usuario de la entrada seleccionada al portapapeles.
+
+        Refs: FR-015 (copiar al portapapeles), US5 Acceptance Scenario 1.
+        """
+        entry = self._get_selected_entry()
+        if entry is None:
+            return
+        from ui import clipboard
+        clipboard.copy_to_clipboard(self._app.root, entry.username)
+        self._show_copy_toast("✓ Usuario copiado")
+
+    def _copy_password(self) -> None:
+        """Copia la contraseña de la entrada seleccionada al portapapeles.
+
+        Refs: FR-015 (copiar al portapapeles), US5 Acceptance Scenario 1.
+        """
+        entry = self._get_selected_entry()
+        if entry is None:
+            return
+        from ui import clipboard
+        clipboard.copy_to_clipboard(self._app.root, entry.password)
+        self._show_copy_toast("✓ Contraseña copiada")
+
+    def _show_copy_toast(self, message: str) -> None:
+        """Muestra confirmación visual transitoria que desaparece tras 2 s.
+
+        Ref: US5 Acceptance Scenario 1 — confirmación visual tras copiar.
+        """
+        self._copy_toast.config(text=message)
+        self._copy_toast.pack(pady=(2, 0))
+        self._app.root.after(2000, self._copy_toast.pack_forget)
 
     def _open_create_form(self) -> None:
         """Abre EntryFormView en modo creación (US2 Acceptance Scenario 1)."""
@@ -237,7 +318,7 @@ class MainView(tk.Frame):
         self._refresh_entries()
 
     def _on_selection_change(self, _event: tk.Event) -> None:
-        self._update_delete_btn()
+        self._update_action_btns()
 
     def _on_double_click(self, event: tk.Event) -> None:
         """Doble clic en una fila abre el formulario de edición."""
@@ -252,7 +333,10 @@ class MainView(tk.Frame):
         if entry:
             self._open_edit_form(entry)
 
-    def _update_delete_btn(self) -> None:
-        has_selection = bool(self._tree.selection())
-        self._delete_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+    def _update_action_btns(self) -> None:
+        """Habilita o deshabilita botones que requieren una fila seleccionada."""
+        state = tk.NORMAL if self._tree.selection() else tk.DISABLED
+        self._delete_btn.config(state=state)
+        self._copy_user_btn.config(state=state)
+        self._copy_pwd_btn.config(state=state)
 

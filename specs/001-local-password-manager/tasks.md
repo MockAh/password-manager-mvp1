@@ -109,9 +109,9 @@ todos los tests de seguridad pasen.
 
 **Independent Test**: Invocar generador → configurar longitud 24 + solo minúsculas + dígitos → generar → resultado tiene 24 chars y solo minúsculas/dígitos → regenerar → nuevo valor distinto → "Usar contraseña" → campo relleno.
 
-- [ ] T026 [US4] Implementar `src/generator/password_generator.py` — `generate_password(length, use_uppercase, use_lowercase, use_digits, use_symbols) -> str` usando `secrets.choice`; valida `8 <= length <= 128` y al menos un charset activo, lanza `ValueError` en caso contrario; nunca usa `random`
-- [ ] T027 [US4] Escribir tests en `tests/unit/test_password_generator.py`: longitud correcta; solo chars de charsets habilitados; valores sucesivos distintos (≥ 99/100 llamadas únicas sobre muestra de 100); boundary `length=8` y `length=128`; `ValueError` en `length=7`, `length=129`; `ValueError` con todos charsets False; un solo charset habilitado funciona sin error
-- [ ] T028 [P] [US4] Implementar `src/ui/views/generator_dialog.py` — `Toplevel` Tkinter: `Spinbox` para longitud (8–128), cuatro `Checkbutton` para charsets (al menos uno debe estar activo), botón "Generar" (deshabilitado si ningún charset activo), `Entry` readonly para resultado, botón "Regenerar", botón "Usar esta contraseña" que escribe valor en campo del caller y cierra; añadir botón "Generar contraseña" en `entry_form_view.py` que abre este diálogo
+- [X] T026 [US4] Implementar `src/generator/password_generator.py` — `generate_password(length, use_uppercase, use_lowercase, use_digits, use_symbols) -> str` usando `secrets.choice`; valida `8 <= length <= 128` y al menos un charset activo, lanza `ValueError` en caso contrario; nunca usa `random`
+- [X] T027 [US4] Escribir tests en `tests/unit/test_password_generator.py`: longitud correcta; solo chars de charsets habilitados; valores sucesivos distintos (≥ 99/100 llamadas únicas sobre muestra de 100); boundary `length=8` y `length=128`; `ValueError` en `length=7`, `length=129`; `ValueError` con todos charsets False; un solo charset habilitado funciona sin error
+- [X] T028 [P] [US4] Implementar `src/ui/views/generator_dialog.py` — `Toplevel` Tkinter: `Spinbox` para longitud (8–128), cuatro `Checkbutton` para charsets (al menos uno debe estar activo), botón "Generar" (deshabilitado si ningún charset activo), `Entry` readonly para resultado, botón "Regenerar", botón "Usar esta contraseña" que escribe valor en campo del caller y cierra; añadir botón "Generar contraseña" en `entry_form_view.py` que abre este diálogo
 
 ---
 
@@ -121,8 +121,8 @@ todos los tests de seguridad pasen.
 
 **Independent Test**: Copiar contraseña → pegar en editor → correcto → esperar 20 s → portapapeles vacío. Copiar → bloquear antes de 20 s → portapapeles inmediatamente vacío.
 
-- [ ] T029 [US5] Implementar `src/ui/clipboard.py` — variable de módulo `_timer: threading.Timer | None`; `copy_to_clipboard(root: tk.Tk, value: str, clear_after_s: int = 20)`: cancela timer previo, `root.clipboard_clear()` + `root.clipboard_append(value)`, inicia nuevo `threading.Timer(clear_after_s, _do_clear, args=[root])`; `cancel_clipboard_timer(root)`: cancela timer activo y llama a `root.clipboard_clear()` inmediatamente (FR-022)
-- [ ] T030 [P] [US5] Añadir botones "Copiar usuario" y "Copiar contraseña" a cada fila de entrada en `src/ui/views/main_view.py`; wired a `clipboard.copy_to_clipboard()`; mostrar confirmación visual transitoria (Label que desaparece tras 2 s); conectar `App.lock_vault()` para llamar a `clipboard.cancel_clipboard_timer()` antes de bloquear (FR-022)
+- [X] T029 [US5] Implementar `src/ui/clipboard.py` — variable de módulo `_timer: threading.Timer | None`; `copy_to_clipboard(root: tk.Tk, value: str, clear_after_s: int = 20)`: cancela timer previo, `root.clipboard_clear()` + `root.clipboard_append(value)`, inicia nuevo `threading.Timer(clear_after_s, _do_clear, args=[root])`; `cancel_clipboard_timer(root)`: cancela timer activo y llama a `root.clipboard_clear()` inmediatamente (FR-022)
+- [X] T030 [P] [US5] Añadir botones "Copiar usuario" y "Copiar contraseña" a cada fila de entrada en `src/ui/views/main_view.py`; wired a `clipboard.copy_to_clipboard()`; mostrar confirmación visual transitoria (Label que desaparece tras 2 s); conectar `App.lock_vault()` para llamar a `clipboard.cancel_clipboard_timer()` antes de bloquear (FR-022)
 
 ---
 
