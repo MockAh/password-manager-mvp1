@@ -145,9 +145,9 @@ todos los tests de seguridad pasen.
 
 **Independent Test**: Configurar timeout a 10 s → desbloquear → no interactuar → tras 10 s pantalla de desbloqueo aparece. Interactuar antes de 10 s → timer se reinicia.
 
-- [ ] T035 [US7] Añadir timer de inactividad a `VaultService` en `src/vault/service.py` — atributo `_inactivity_timer: threading.Timer | None`; `record_activity()` cancela y reinicia timer con `timeout_s` (default 300); `lock_vault()` cancela timer; `__init__` acepta `auto_lock_timeout_s: int = 300`; cuando el timer dispara llama a `lock_vault()` y notifica a un callback `on_auto_lock` registrable
-- [ ] T036 [US7] Extender tests en `tests/unit/test_vault_service.py`: vault se bloquea tras timeout configurable (usar timeout pequeño, ≥ 0.1 s en test); `record_activity()` reinicia el timer (vault no se bloquea si se llama dentro del timeout); `lock_vault()` cancela el timer pendiente; `is_unlocked` False tras auto-lock
-- [ ] T037 [US7] Conectar `record_activity()` en `src/ui/app.py` — `root.bind_all("<KeyPress>", ...)`, `root.bind_all("<ButtonPress>", ...)`, `root.bind_all("<MouseWheel>", ...)`; en `on_auto_lock` callback: llamar a `show_view(UnlockView)` en el hilo de Tkinter usando `root.after(0, ...)`
+- [X] T035 [US7] Añadir timer de inactividad a `VaultService` en `src/vault/service.py` — atributo `_inactivity_timer: threading.Timer | None`; `record_activity()` cancela y reinicia timer con `timeout_s` (default 300); `lock_vault()` cancela timer; `__init__` acepta `auto_lock_timeout_s: int = 300`; cuando el timer dispara llama a `lock_vault()` y notifica a un callback `on_auto_lock` registrable
+- [X] T036 [US7] Extender tests en `tests/unit/test_vault_service.py`: vault se bloquea tras timeout configurable (usar timeout pequeño, ≥ 0.1 s en test); `record_activity()` reinicia el timer (vault no se bloquea si se llama dentro del timeout); `lock_vault()` cancela el timer pendiente; `is_unlocked` False tras auto-lock
+- [X] T037 [US7] Conectar `record_activity()` en `src/ui/app.py` — `root.bind_all("<KeyPress>", ...)`, `root.bind_all("<ButtonPress>", ...)`, `root.bind_all("<MouseWheel>", ...)`; en `on_auto_lock` callback: llamar a `show_view(UnlockView)` en el hilo de Tkinter usando `root.after(0, ...)`
 
 ---
 

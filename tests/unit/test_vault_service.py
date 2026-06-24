@@ -4,6 +4,8 @@ Cubre: create_vault, unlock_vault, lock_vault, is_unlocked.
 Los tests de integración completos están en test_vault_roundtrip.py.
 """
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -698,4 +700,191 @@ class TestFolderCRUD:
         """Bóveda recién creada no tiene carpetas."""
         svc, _ = svc_open
         assert svc.get_folders() == []
+
+
+# ── Auto-bloqueo por inactividad (T036 — US7) ────────────────────────────────
+
+
+class TestAutoLock:
+    """Tests del auto-bloqueo por inactividad — US7, tareas T035–T036.
+
+    Todos los tests usan timeouts pequeños (≥ 0.1 s, según la tarea T036)
+    para que los tests sean rápidos sin sacrificar fiabilidad.
+
+    Refs: spec.md → User Story 7 (Acceptance Scenarios 1–3).
+          FR-017 (auto-bloqueo configurable, default 5 min).
+          contracts/vault-service-interface.md → record_activity, lock_vault.
+    """
+
+    # Timeout usado en la mayoría de los tests; pequeño pero suficiente para
+    # que el timer del sistema lo dispare sin carreras de hilos.
+    _TIMEOUT = 0.15  # segundos
+
+    @pytest.fixture
+    def vault_path(self, tmp_path: Path) -> Path:
+        return tmp_path / "autolock.vault"
+
+    # ── US7 Sc1 — la bóveda se bloquea automáticamente ───────────────────────
+
+    def test_vault_locks_after_timeout(self, vault_path):
+        """La bóveda se bloquea sola tras el período de inactividad.
+
+        Ref: FR-017 (auto-bloqueo por inactividad), US7 Acceptance Scenario 1.
+        """
+        svc = VaultService(auto_lock_timeout_s=self._TIMEOUT)
+        svc.create_vault(vault_path, PASSWORD)
+        assert svc.is_unlocked
+
+        # Esperar a que el timer dispare (timeout + margen generoso)
+        deadline = time.perf_counter() + self._TIMEOUT + 0.5
+        while svc.is_unlocked and time.perf_counter() < deadline:
+            time.sleep(0.02)
+
+        assert not svc.is_unlocked, (
+            "La bóveda debería haberse bloqueado automáticamente por inactividad (FR-017)"
+        )
+
+    def test_is_unlocked_false_after_autolock(self, vault_path):
+        """is_unlocked devuelve False tras el auto-bloqueo.
+
+        Ref: US7 Acceptance Scenario 1 — post-condición tras auto-bloqueo.
+             contracts/vault-service-interface.md → is_unlocked.
+        """
+        svc = VaultService(auto_lock_timeout_s=self._TIMEOUT)
+        svc.create_vault(vault_path, PASSWORD)
+
+        deadline = time.perf_counter() + self._TIMEOUT + 0.5
+        while svc.is_unlocked and time.perf_counter() < deadline:
+            time.sleep(0.02)
+
+        assert svc.is_unlocked is False
+
+    # ── Callback on_auto_lock ─────────────────────────────────────────────────
+
+    def test_on_auto_lock_callback_invoked(self, vault_path):
+        """El callback on_auto_lock se invoca cuando el timer dispara.
+
+        Ref: contracts/vault-service-interface.md → on_auto_lock callback.
+             T035 — «cuando el timer dispara notifica a un callback on_auto_lock registrable».
+        """
+        callback_called = threading.Event()
+        svc = VaultService(
+            auto_lock_timeout_s=self._TIMEOUT,
+            on_auto_lock=callback_called.set,
+        )
+        svc.create_vault(vault_path, PASSWORD)
+
+        triggered = callback_called.wait(timeout=self._TIMEOUT + 0.5)
+        assert triggered, "on_auto_lock callback no fue invocado tras el timeout"
+        assert not svc.is_unlocked
+
+    def test_on_auto_lock_callback_not_invoked_when_disabled(self, vault_path):
+        """Con auto_lock_timeout_s=0 el timer no arranca y el callback no se invoca.
+
+        Ref: T035 — timeout_s=0 desactiva el auto-bloqueo (útil en tests).
+        """
+        callback_called = threading.Event()
+        svc = VaultService(
+            auto_lock_timeout_s=0,
+            on_auto_lock=callback_called.set,
+        )
+        svc.create_vault(vault_path, PASSWORD)
+
+        # Esperamos el doble del timeout habitual; el callback NO debe dispararse.
+        triggered = callback_called.wait(timeout=self._TIMEOUT * 2)
+        assert not triggered, "on_auto_lock no debe dispararse cuando timeout=0"
+        assert svc.is_unlocked  # la bóveda sigue abierta
+
+    # ── US7 Sc3 — la actividad reinicia el timer ──────────────────────────────
+
+    def test_record_activity_resets_timer(self, vault_path):
+        """record_activity() reinicia el timer: la bóveda NO se bloquea mientras hay actividad.
+
+        Ref: FR-017, US7 Acceptance Scenario 3 — cualquier interacción reinicia el timer.
+             contracts/vault-service-interface.md → record_activity.
+        """
+        TIMEOUT = 0.20
+        svc = VaultService(auto_lock_timeout_s=TIMEOUT)
+        svc.create_vault(vault_path, PASSWORD)
+
+        # Esperar el 60 % del timeout (antes de que dispare), luego resetear.
+        time.sleep(TIMEOUT * 0.6)
+        svc.record_activity()
+
+        # Tras el reset, aún estamos al 0 % del nuevo intervalo → desbloqueada.
+        assert svc.is_unlocked, "La bóveda debe seguir desbloqueada tras record_activity()"
+
+        # Esperar otro 60 % desde el reset (< TIMEOUT desde el reset → aún desbloqueada).
+        time.sleep(TIMEOUT * 0.6)
+        assert svc.is_unlocked, (
+            "La bóveda debe permanecer desbloqueada porque record_activity() reinició el timer"
+        )
+
+        # Ahora esperar que el timer dispare desde el último reset.
+        deadline = time.perf_counter() + TIMEOUT + 0.5
+        while svc.is_unlocked and time.perf_counter() < deadline:
+            time.sleep(0.02)
+
+        assert not svc.is_unlocked, (
+            "La bóveda debe bloquearse tras el timeout completo desde la última actividad"
+        )
+
+    def test_record_activity_no_op_when_locked(self, vault_path):
+        """record_activity() no lanza excepción ni inicia timer cuando está bloqueada.
+
+        Ref: contracts/vault-service-interface.md — record_activity.
+             La bóveda bloqueada no tiene sesión activa; la actividad es ignorada.
+        """
+        svc = VaultService(auto_lock_timeout_s=5)
+        svc.create_vault(vault_path, PASSWORD)
+        svc.lock_vault()
+        assert not svc.is_unlocked
+
+        # No debe lanzar ni iniciar timer
+        svc.record_activity()
+        assert svc._inactivity_timer is None
+
+    # ── lock_vault() cancela el timer ─────────────────────────────────────────
+
+    def test_lock_vault_cancels_inactivity_timer(self, vault_path):
+        """lock_vault() cancela el timer de inactividad pendiente.
+
+        Ref: contracts/vault-service-interface.md → lock_vault.
+             US7 Acceptance Scenario 1 — el bloqueo manual también cancela el timer.
+        """
+        svc = VaultService(auto_lock_timeout_s=60)  # Timeout largo: no dispara en el test.
+        svc.create_vault(vault_path, PASSWORD)
+
+        # El timer debe estar activo tras create_vault.
+        assert svc._inactivity_timer is not None, "El timer debe iniciar tras desbloquear"
+
+        svc.lock_vault()
+
+        # Tras bloquear, el timer debe haber sido cancelado.
+        assert svc._inactivity_timer is None, "lock_vault() debe cancelar el timer"
+        assert not svc.is_unlocked
+
+    def test_lock_vault_cancels_timer_idempotent(self, vault_path):
+        """lock_vault() puede llamarse varias veces sin error aunque el timer ya esté cancelado.
+
+        Ref: contracts/vault-service-interface.md → lock_vault es idempotente.
+        """
+        svc = VaultService(auto_lock_timeout_s=60)
+        svc.create_vault(vault_path, PASSWORD)
+        svc.lock_vault()
+        svc.lock_vault()  # segunda llamada — no debe lanzar
+        assert not svc.is_unlocked
+        assert svc._inactivity_timer is None
+
+    # ── Timer no arranca con timeout = 0 ─────────────────────────────────────
+
+    def test_no_timer_when_timeout_zero(self, vault_path):
+        """Con auto_lock_timeout_s=0 no se crea ningún timer.
+
+        Ref: T035 — «0 para desactivar (útil en tests)».
+        """
+        svc = VaultService(auto_lock_timeout_s=0)
+        svc.create_vault(vault_path, PASSWORD)
+        assert svc._inactivity_timer is None
+        assert svc.is_unlocked
 

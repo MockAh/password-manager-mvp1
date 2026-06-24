@@ -1,9 +1,11 @@
-"""Aplicación principal — contenedor de vistas y barra de herramientas (T017).
+"""Aplicación principal — contenedor de vistas y barra de herramientas (T017, T037).
 
 Responsabilidades:
   - Gestionar la navegación entre vistas (show_view).
   - Mostrar barra de herramientas con botón de bloqueo cuando la bóveda esté abierta.
   - Recibir el callback de auto-bloqueo desde VaultService y volver a UnlockView.
+  - Registrar toda actividad del usuario (tecla, clic, scroll) para reiniciar el
+    temporizador de inactividad (record_activity) — T037, US7 Sc3.
 
 Constitución: Principio VII — UX consistente; Principio VIII — rendimiento UI.
 """
@@ -37,6 +39,33 @@ class App(tk.Frame):
 
         # Inyectar callback de auto-bloqueo en el servicio
         service._on_auto_lock = self._on_auto_lock_callback
+
+        # Registrar actividad del usuario para reiniciar el timer de inactividad.
+        # Refs: FR-017, US7 Acceptance Scenario 3 — tecla, clic y scroll reinician el timer.
+        self._register_activity_bindings()
+
+    def _register_activity_bindings(self) -> None:
+        """Registra listeners de actividad del usuario sobre toda la ventana.
+
+        Cualquier pulsación de tecla, clic o scroll reinicia el temporizador
+        de inactividad del servicio (record_activity).
+
+        Refs: FR-017 (auto-bloqueo por inactividad), T037 (US7),
+              US7 Acceptance Scenario 3 — «cualquier acción reinicia el temporizador».
+        """
+        self.root.bind_all("<KeyPress>", self._on_user_activity)
+        self.root.bind_all("<ButtonPress>", self._on_user_activity)
+        self.root.bind_all("<MouseWheel>", self._on_user_activity)
+
+    def _on_user_activity(self, _event: tk.Event) -> None:
+        """Callback disparado por cualquier evento de interacción del usuario.
+
+        Delega en VaultService.record_activity() que, si la bóveda está
+        desbloqueada, cancela y reinicia el timer de inactividad.
+
+        Refs: FR-017, US7 Acceptance Scenario 3.
+        """
+        self.service.record_activity()
 
     def _build_toolbar(self) -> None:
         self._toolbar = tk.Frame(self, bg="#2d2d2d", pady=4)

@@ -24,7 +24,7 @@ def main() -> None:
     root.minsize(580, 420)
     root.resizable(True, True)
 
-    service = VaultService()  # auto-bloqueo activado (300s por defecto)
+    service = VaultService()  # auto-bloqueo activado
     App(root, service)
 
     root.mainloop()
