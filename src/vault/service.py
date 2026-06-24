@@ -375,6 +375,29 @@ class VaultService:
         session.payload.entries.remove(entry)
         self._save()
 
+    # ── Búsqueda en tiempo real (US3) ─────────────────────────────────────────
+
+    def search_entries(self, query: str) -> list:
+        """Filtra entradas por subcadena case-insensitive en title o username.
+
+        Contrato (contracts/vault-service-interface.md → search_entries):
+          - Comparación case-insensitive, coincidencia por subcadena.
+          - query vacío ("") coincide con todas las entradas.
+          - Devuelve lista vacía si no hay coincidencias.
+
+        Refs: FR-013 (búsqueda en tiempo real), SC-003 (≤ 100 ms / 500 entradas),
+              US3 Acceptance Scenarios 1–3.
+
+        Raises:
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        needle = query.casefold()
+        return [
+            e for e in session.payload.entries
+            if needle in e.title.casefold() or needle in e.username.casefold()
+        ]
+
     # ── Ayudantes internos ────────────────────────────────────────────────────
 
     def _find_entry(self, session: "VaultSession", entry_id: str) -> "EntryRecord":

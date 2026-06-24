@@ -97,9 +97,9 @@ todos los tests de seguridad pasen.
 
 **Independent Test**: Bóveda con 20+ entradas — escribir término → lista se filtra instantáneamente; borrar → lista completa; término sin resultados → estado vacío.
 
-- [ ] T023 [US3] Implementar `VaultService.search_entries()` en `src/vault/service.py` — búsqueda case-insensitive por subcadena en `title` y `username`; devuelve lista vacía si no hay coincidencias; lanza `VaultLockedError` si vault bloqueada
-- [ ] T024 [US3] Extender tests en `tests/unit/test_vault_service.py`: coincidencia por subcadena en `title`; coincidencia por subcadena en `username`; insensible a mayúsculas; query vacío devuelve todas las entradas de la vista activa; sin coincidencias devuelve lista vacía; búsqueda sobre 500 entradas completa en ≤ 100 ms (assert `time.perf_counter`)
-- [ ] T025 [P] [US3] Añadir barra de búsqueda a `src/ui/views/main_view.py` — `tk.Entry` con `StringVar`; trazar `StringVar` con `trace_add("write", callback)`; callback llama a `search_entries(query)` si `query` no vacío, o `get_entries()` si vacío; actualiza Treeview en cada pulsación; muestra Label "Sin resultados" cuando la lista devuelta está vacía
+- [X] T023 [US3] Implementar `VaultService.search_entries()` en `src/vault/service.py` — búsqueda case-insensitive por subcadena en `title` y `username`; devuelve lista vacía si no hay coincidencias; lanza `VaultLockedError` si vault bloqueada
+- [X] T024 [US3] Extender tests en `tests/unit/test_vault_service.py`: coincidencia por subcadena en `title`; coincidencia por subcadena en `username`; insensible a mayúsculas; query vacío devuelve todas las entradas de la vista activa; sin coincidencias devuelve lista vacía; búsqueda sobre 500 entradas completa en ≤ 100 ms (assert `time.perf_counter`)
+- [X] T025 [P] [US3] Añadir barra de búsqueda a `src/ui/views/main_view.py` — `tk.Entry` con `StringVar`; trazar `StringVar` con `trace_add("write", callback)`; callback llama a `search_entries(query)` si `query` no vacío, o `get_entries()` si vacío; actualiza Treeview en cada pulsación; muestra Label "Sin resultados" cuando la lista devuelta está vacía
 
 ---
 

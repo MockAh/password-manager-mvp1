@@ -1,14 +1,17 @@
-"""Vista principal — lista de entradas y operaciones CRUD (T022).
+"""Vista principal — lista de entradas, búsqueda en tiempo real y CRUD (T022, T025).
 
 Responsabilidades:
   - Mostrar lista de entradas en un Treeview (columnas: Título, Usuario).
+  - Barra de búsqueda en tiempo real — filtra por título o usuario (US3).
   - Botón "Nueva entrada" → abre EntryFormView en modo creación (US2 Sc1).
   - Doble clic en entrada → abre EntryFormView en modo edición (US2 Sc2).
   - Botón "Eliminar" → confirmación con askyesno → elimina (US2 Sc3–4).
   - Refresca la lista tras cada operación CRUD.
 
 Constitución: Principio VII — confirmación antes de eliminar (FR-012).
-Refs: spec.md → US2 Acceptance Scenarios 1–4; data-model.md → EntryRecord.
+Refs: spec.md → US2 Acceptance Scenarios 1–4; US3 Acceptance Scenarios 1–3.
+       FR-013 (búsqueda en tiempo real), SC-003 (≤ 100 ms / 500 entradas).
+       data-model.md → EntryRecord.
 """
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -71,6 +74,18 @@ class MainView(tk.Frame):
         )
         self._delete_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
+        # ── Barra de búsqueda (US3, FR-013) ───────────────────────────────────
+        search_bar = tk.Frame(self)
+        search_bar.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(search_bar, text="Buscar:").pack(side=tk.LEFT, padx=(0, 6))
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", self._on_search_changed)
+        tk.Entry(
+            search_bar,
+            textvariable=self._search_var,
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         # ── Treeview ──────────────────────────────────────────────────────────
         tree_frame = tk.Frame(self)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -93,10 +108,16 @@ class MainView(tk.Frame):
         self._tree.column(_COL_USER, width=180, anchor="w")
         self._tree.pack(fill=tk.BOTH, expand=True)
 
-        # ── Label estado vacío ────────────────────────────────────────────────
+        # ── Labels de estado ────────────────────────────────────────────────
         self._empty_label = tk.Label(
             self,
             text="No hay entradas. Usa '+ Nueva entrada' para añadir la primera.",
+            fg="gray",
+        )
+        # Mostrado cuando la búsqueda activa no produce resultados (US3 Sc3).
+        self._no_results_label = tk.Label(
+            self,
+            text="Sin resultados.",
             fg="gray",
         )
 
@@ -107,12 +128,25 @@ class MainView(tk.Frame):
     # ── Datos ─────────────────────────────────────────────────────────────────
 
     def _refresh_entries(self) -> None:
-        """Recarga la lista de entradas desde VaultService y actualiza el Treeview."""
+        """Recarga la lista de entradas desde VaultService y actualiza el Treeview.
+
+        Cuando hay un término de búsqueda activo delega en search_entries();
+        en caso contrario usa get_entries() para mostrar todas las entradas.
+
+        Refs: FR-013 (búsqueda en tiempo real), US3 Acceptance Scenarios 1–3,
+              SC-003 (≤ 100 ms / 500 entradas).
+        """
         for iid in self._tree.get_children():
             self._tree.delete(iid)
 
+        query = self._search_var.get().strip()
         try:
-            entries: list["EntryRecord"] = self._app.service.get_entries()
+            if query:
+                # US3 Sc1: filtrar por query en tiempo real.
+                entries: list["EntryRecord"] = self._app.service.search_entries(query)
+            else:
+                # US3 Sc2: query vacío → mostrar todas las entradas.
+                entries = self._app.service.get_entries()
         except Exception:
             entries = []
 
@@ -124,10 +158,17 @@ class MainView(tk.Frame):
                 values=(entry.title, entry.username),
             )
 
-        if entries:
-            self._empty_label.pack_forget()
-        else:
-            self._empty_label.pack(pady=8)
+        # Gestionar labels de estado
+        self._empty_label.pack_forget()
+        self._no_results_label.pack_forget()
+
+        if not entries:
+            if query:
+                # US3 Sc3: búsqueda sin resultados → mensaje informativo.
+                self._no_results_label.pack(pady=8)
+            else:
+                # Bóveda genuinamente vacía.
+                self._empty_label.pack(pady=8)
 
         # Actualizar estado del botón Eliminar
         self._update_delete_btn()
@@ -184,6 +225,16 @@ class MainView(tk.Frame):
         self._refresh_entries()
 
     # ── Eventos ───────────────────────────────────────────────────────────────
+
+    def _on_search_changed(self, *_args) -> None:
+        """Callback disparado por StringVar en cada pulsación de tecla.
+
+        Llama a search_entries(query) si hay texto, get_entries() si está vacío,
+        y actualiza el Treeview inmediatamente.
+
+        Refs: T025 (US3), FR-013, US3 Acceptance Scenario 1.
+        """
+        self._refresh_entries()
 
     def _on_selection_change(self, _event: tk.Event) -> None:
         self._update_delete_btn()

@@ -358,3 +358,143 @@ class TestEntryCRUD:
         # Verificar username editado
         reloaded = next(e for e in entries if e.title == "Persistente")
         assert reloaded.username == "u1_editado"
+
+
+# ── Búsqueda en tiempo real (T024) ────────────────────────────────────────────
+
+
+class TestSearchEntries:
+    """Tests de búsqueda en tiempo real — US3, tareas T023–T024.
+
+    Refs: spec.md → User Story 3 (Acceptance Scenarios 1–3).
+          contracts/vault-service-interface.md → search_entries.
+          FR-013: búsqueda en tiempo real filtra por título y usuario.
+          SC-003: ≤ 100 ms incluso con 500 entradas.
+    """
+
+    @pytest.fixture
+    def svc_with_entries(self, tmp_path):
+        """VaultService con bóveda desbloqueada y varias entradas de prueba."""
+        svc = VaultService(auto_lock_timeout_s=0)
+        path = tmp_path / "search.vault"
+        svc.create_vault(path, PASSWORD)
+        # Inserciones directas en payload para evitar escrituras en disco repetidas.
+        from vault.models import EntryRecord
+        entries = [
+            EntryRecord.create(title="GitHub", username="alice@example.com"),
+            EntryRecord.create(title="Gmail", username="alice@gmail.com"),
+            EntryRecord.create(title="Amazon", username="bob@amazon.com"),
+            EntryRecord.create(title="Twitter", username="charlie"),
+        ]
+        svc._session.payload.entries.extend(entries)
+        return svc
+
+    # ── Coincidencia por subcadena en title ──────────────────────────────────
+
+    def test_search_by_title_substring(self, svc_with_entries):
+        """Coincidencia por subcadena en title.
+        Ref: FR-013; US3 Acceptance Scenario 1."""
+        svc = svc_with_entries
+        results = svc.search_entries("Git")
+        assert len(results) == 1
+        assert results[0].title == "GitHub"
+
+    def test_search_by_title_partial(self, svc_with_entries):
+        """Subcadena que coincide con varios títulos.
+        Ref: FR-013; US3 Acceptance Scenario 1."""
+        svc = svc_with_entries
+        results = svc.search_entries("a")
+        # "GitHub" (sin 'a'), "Gmail" (tiene 'a'), "Amazon" (tiene 'a'), "Twitter" (sin 'a')
+        titles = {e.title for e in results}
+        assert "Gmail" in titles
+        assert "Amazon" in titles
+
+    # ── Coincidencia por subcadena en username ───────────────────────────────
+
+    def test_search_by_username_substring(self, svc_with_entries):
+        """Coincidencia por subcadena en username.
+        Ref: FR-013; contracts/vault-service-interface.md → search_entries."""
+        svc = svc_with_entries
+        results = svc.search_entries("alice")
+        assert len(results) == 2
+        titles = {e.title for e in results}
+        assert titles == {"GitHub", "Gmail"}
+
+    def test_search_by_username_only(self, svc_with_entries):
+        """Query que solo está en username, no en title.
+        Ref: FR-013; US3 Acceptance Scenario 1."""
+        svc = svc_with_entries
+        results = svc.search_entries("charlie")
+        assert len(results) == 1
+        assert results[0].title == "Twitter"
+
+    # ── Insensibilidad a mayúsculas ──────────────────────────────────────────
+
+    def test_search_case_insensitive_title(self, svc_with_entries):
+        """Búsqueda en title insensible a mayúsculas.
+        Ref: contracts/vault-service-interface.md → search_entries (case-insensitive)."""
+        svc = svc_with_entries
+        lower = svc.search_entries("github")
+        upper = svc.search_entries("GITHUB")
+        mixed = svc.search_entries("GitHub")
+        assert len(lower) == len(upper) == len(mixed) == 1
+
+    def test_search_case_insensitive_username(self, svc_with_entries):
+        """Búsqueda en username insensible a mayúsculas.
+        Ref: contracts/vault-service-interface.md → search_entries (case-insensitive)."""
+        svc = svc_with_entries
+        results = svc.search_entries("ALICE")
+        assert len(results) == 2
+
+    # ── Query vacío ──────────────────────────────────────────────────────────
+
+    def test_search_empty_query_returns_all(self, svc_with_entries):
+        """Query vacío devuelve todas las entradas (subcadena vacía está en cualquier str).
+        Ref: US3 Acceptance Scenario 2 — borrar búsqueda muestra todas las entradas."""
+        svc = svc_with_entries
+        results = svc.search_entries("")
+        assert len(results) == len(svc.get_entries())
+
+    # ── Sin coincidencias ────────────────────────────────────────────────────
+
+    def test_search_no_match_returns_empty(self, svc_with_entries):
+        """Sin coincidencias devuelve lista vacía.
+        Ref: US3 Acceptance Scenario 3 — estado vacío con mensaje informativo."""
+        svc = svc_with_entries
+        results = svc.search_entries("xyzNuncaExiste99")
+        assert results == []
+
+    # ── Rendimiento SC-003 ───────────────────────────────────────────────────
+
+    def test_search_500_entries_under_100ms(self, tmp_path):
+        """Búsqueda sobre 500 entradas completa en ≤ 100 ms.
+        Ref: SC-003 (plan.md → Performance Goals), Constitución Principio VIII."""
+        import time
+        from vault.models import EntryRecord
+
+        svc = VaultService(auto_lock_timeout_s=0)
+        path = tmp_path / "perf.vault"
+        svc.create_vault(path, PASSWORD)
+        # Inserción directa en payload — evita 500 operaciones de cifrado/IO.
+        for i in range(500):
+            svc._session.payload.entries.append(
+                EntryRecord.create(title=f"Entrada {i:04d}", username=f"user{i}@example.com")
+            )
+
+        start = time.perf_counter()
+        results = svc.search_entries("Entrada")
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert len(results) == 500, "Todas las entradas deben coincidir con 'Entrada'"
+        assert elapsed_ms < 100, (
+            f"SC-003: búsqueda tardó {elapsed_ms:.2f} ms; límite 100 ms"
+        )
+
+    # ── Bóveda bloqueada ─────────────────────────────────────────────────────
+
+    def test_search_locked_raises(self):
+        """Búsqueda sobre bóveda bloqueada lanza VaultLockedError.
+        Ref: contracts/vault-service-interface.md → search_entries."""
+        svc = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(VaultLockedError):
+            svc.search_entries("algo")
