@@ -22,4 +22,4 @@ vault.json
 # SO / editor
 .vscode/
 .DS_Store
-Thumbs.db
+Thumbs.db*:Zone.Identifier

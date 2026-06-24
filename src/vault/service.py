@@ -1,10 +1,11 @@
 """Servicio de bóveda — capa de negocio principal.
 
-Responsabilidades (US1, Fase 3):
+Responsabilidades (US1–US2, Fases 3–4):
   - Crear una bóveda nueva (create_vault).
   - Desbloquear una bóveda existente (unlock_vault).
   - Bloquear la sesión activa (lock_vault).
   - Auto-bloqueo por inactividad con threading.Timer.
+  - CRUD de entradas: get_entries, add_entry, update_entry, delete_entry.
 
 Constitución:
   Principio I — clave derivada nunca en disco; salt único por bóveda.
@@ -35,8 +36,10 @@ from vault.exceptions import (
     VaultCorruptError,
     VaultLockedError,
     WrongPasswordError,
+    EntryNotFoundError,
+    FolderNotFoundError,
 )
-from vault.models import VaultPayload, VaultSession
+from vault.models import EntryRecord, VaultPayload, VaultSession
 
 # ── Constantes de formato ─────────────────────────────────────────────────────
 
@@ -49,6 +52,10 @@ DEFAULT_KDF_PARAMS = {
     "hash_len": ARGON2_HASH_LEN,
 }
 DEFAULT_AUTO_LOCK_TIMEOUT_S = 300  # 5 minutos — FR-017
+
+# Sentinel para get_entries: devuelve entradas sin carpeta asignada.
+# Corresponde al contrato vault-service-interface.md → get_entries(folder_id="").
+NO_FOLDER: str = ""
 
 
 class VaultService:
@@ -256,7 +263,126 @@ class VaultService:
         if self._on_auto_lock is not None:
             self._on_auto_lock()
 
+    # ── Gestión de entradas (US2) ─────────────────────────────────────────────
+
+    def get_entries(self, folder_id: Optional[str] = None) -> list:
+        """Devuelve entradas de la bóveda según el filtro de carpeta.
+
+        Contrato (vault-service-interface.md):
+          - folder_id is None  → todas las entradas (sin filtro).
+          - folder_id == ""    → entradas sin carpeta asignada (folder_id=None en modelo).
+          - folder_id == uuid  → entradas asignadas a esa carpeta.
+
+        Refs: FR-010 (listado de entradas), US2 Acceptance Scenario 5.
+
+        Raises:
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        entries = session.payload.entries
+        if folder_id is None:
+            return list(entries)
+        if folder_id == NO_FOLDER:
+            return [e for e in entries if e.folder_id is None]
+        return [e for e in entries if e.folder_id == folder_id]
+
+    def add_entry(
+        self,
+        title: str,
+        username: str = "",
+        password: str = "",
+        url: str = "",
+        notes: str = "",
+        folder_id: Optional[str] = None,
+    ) -> "EntryRecord":
+        """Crea una nueva entrada y persiste la bóveda.
+
+        Genera UUID4 y timestamps ISO-8601 UTC (data-model.md → EntryRecord.create).
+        Guarda el vault cifrado tras la creación.
+
+        Refs: FR-010 (añadir entrada), US2 Acceptance Scenario 1.
+
+        Raises:
+            ValueError: si title está vacío (data-model.md: title no vacío).
+            FolderNotFoundError: si folder_id no corresponde a carpeta existente.
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        if not title:
+            raise ValueError("El título de la entrada no puede estar vacío.")
+        if folder_id is not None:
+            known_ids = {f.id for f in session.payload.folders}
+            if folder_id not in known_ids:
+                raise FolderNotFoundError(
+                    f"No existe ninguna carpeta con id: {folder_id}"
+                )
+        entry = EntryRecord.create(
+            title=title,
+            username=username,
+            password=password,
+            url=url,
+            notes=notes,
+            folder_id=folder_id,
+        )
+        session.payload.entries.append(entry)
+        self._save()
+        return entry
+
+    def update_entry(self, entry_id: str, **fields) -> "EntryRecord":
+        """Actualiza los campos indicados de una entrada y persiste la bóveda.
+
+        Campos actualizables: title, username, password, url, notes, folder_id.
+        Actualiza updated_at automáticamente (data-model.md).
+
+        Refs: FR-010 (editar entrada), US2 Acceptance Scenario 2.
+
+        Raises:
+            EntryNotFoundError: si entry_id no existe.
+            FolderNotFoundError: si el folder_id proporcionado no existe.
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        from datetime import datetime, timezone
+        session = self._require_unlocked()
+        entry = self._find_entry(session, entry_id)
+
+        allowed = {"title", "username", "password", "url", "notes", "folder_id"}
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            if key == "folder_id" and value is not None:
+                known_ids = {f.id for f in session.payload.folders}
+                if value not in known_ids:
+                    raise FolderNotFoundError(
+                        f"No existe ninguna carpeta con id: {value}"
+                    )
+            setattr(entry, key, value)
+
+        entry.updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._save()
+        return entry
+
+    def delete_entry(self, entry_id: str) -> None:
+        """Elimina la entrada con entry_id y persiste la bóveda.
+
+        Refs: FR-010 (eliminar entrada), US2 Acceptance Scenarios 3–4.
+
+        Raises:
+            EntryNotFoundError: si entry_id no existe.
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        entry = self._find_entry(session, entry_id)
+        session.payload.entries.remove(entry)
+        self._save()
+
     # ── Ayudantes internos ────────────────────────────────────────────────────
+
+    def _find_entry(self, session: "VaultSession", entry_id: str) -> "EntryRecord":
+        """Localiza una entrada por ID o lanza EntryNotFoundError."""
+        for entry in session.payload.entries:
+            if entry.id == entry_id:
+                return entry
+        raise EntryNotFoundError(f"No existe ninguna entrada con id: {entry_id}")
 
     def _require_unlocked(self) -> VaultSession:
         """Devuelve la sesión activa o lanza VaultLockedError."""
