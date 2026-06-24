@@ -244,6 +244,23 @@ class VaultService:
             self._cancel_inactivity_timer()
             self._start_inactivity_timer()
 
+    def set_auto_lock_timeout(self, seconds: int) -> None:
+        """Actualiza el timeout de inactividad en caliente.
+
+        Si la bóveda está desbloqueada, cancela el timer actual y arranca uno
+        nuevo con el nuevo valor. Si está bloqueada, el cambio se aplica en el
+        próximo desbloqueo.
+
+        Refs: T039 — diálogo de configuración actualiza VaultService con nuevos timeouts.
+
+        Args:
+            seconds: Nuevo timeout en segundos. 0 desactiva el auto-bloqueo.
+        """
+        self._auto_lock_timeout_s = seconds
+        if self._session is not None:
+            self._cancel_inactivity_timer()
+            self._start_inactivity_timer()
+
     def _start_inactivity_timer(self) -> None:
         if self._auto_lock_timeout_s > 0:
             self._inactivity_timer = threading.Timer(

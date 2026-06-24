@@ -18,8 +18,11 @@ htmlcov/
 vault.json
 *.key
 .env
+bovedas_
 
 # SO / editor
 .vscode/
 .DS_Store
 Thumbs.db*:Zone.Identifier
+README_pass.md:Zone.Identifier
+Reporte_SDD_Gestor_Contrasenas.md:Zone.Identifier

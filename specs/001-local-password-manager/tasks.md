@@ -155,10 +155,10 @@ todos los tests de seguridad pasen.
 
 **Propósito**: Configuración de usuario, cobertura final y validación de requisitos no funcionales
 
-- [ ] T038 [P] Implementar `AppSettings` en `src/vault/models.py` — dataclass con `clipboard_timeout_s: int = 20` y `auto_lock_timeout_s: int = 300`; `load_settings(config_path: Path) -> AppSettings` y `save_settings(config_path, settings)` como JSON no sensible en directorio de configuración del usuario (`platformdirs` o `~/.config/vault-manager/settings.json`)
-- [ ] T039 [P] Añadir diálogo de configuración en `src/ui/app.py` — `Toplevel` accesible desde menú "Configuración"; `Spinbox` para timeout de portapapeles (5–300 s); `Spinbox` para auto-bloqueo (60–3600 s); botón "Guardar" persiste `AppSettings`, actualiza `VaultService` con nuevos timeouts
-- [ ] T040 Ejecutar suite completa de tests con `pytest --cov=src/crypto --cov-report=term-missing tests/` y verificar cobertura ≥ 95 % en `src/crypto/`; identificar y corregir cualquier brecha de cobertura en `src/crypto/kdf.py` y `src/crypto/vault_cipher.py`
-- [ ] T041 [P] Validar requisitos no funcionales: verificar cero tráfico de red durante sesión completa (`ss -tp | grep python`); verificar escritura atómica del vault (matar proceso durante guardado → archivo anterior intacto); confirmar los 5 edge cases de spec.md están cubiertos por tests existentes
+- [X] T038 [P] Implementar `AppSettings` en `src/vault/models.py` — dataclass con `clipboard_timeout_s: int = 20` y `auto_lock_timeout_s: int = 300`; `load_settings(config_path: Path) -> AppSettings` y `save_settings(config_path, settings)` como JSON no sensible en directorio de configuración del usuario (`platformdirs` o `~/.config/vault-manager/settings.json`)
+- [X] T039 [P] Añadir diálogo de configuración en `src/ui/app.py` — `Toplevel` accesible desde menú "Configuración"; `Spinbox` para timeout de portapapeles (5–300 s); `Spinbox` para auto-bloqueo (60–3600 s); botón "Guardar" persiste `AppSettings`, actualiza `VaultService` con nuevos timeouts
+- [X] T040 Ejecutar suite completa de tests con `pytest --cov=src/crypto --cov-report=term-missing tests/` y verificar cobertura ≥ 95 % en `src/crypto/`; identificar y corregir cualquier brecha de cobertura en `src/crypto/kdf.py` y `src/crypto/vault_cipher.py`
+- [X] T041 [P] Validar requisitos no funcionales: verificar cero tráfico de red durante sesión completa (`ss -tp | grep python`); verificar escritura atómica del vault (matar proceso durante guardado → archivo anterior intacto); confirmar los 5 edge cases de spec.md están cubiertos por tests existentes
 
 ---
 

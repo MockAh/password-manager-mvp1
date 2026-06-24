@@ -1,4 +1,4 @@
-"""Aplicación principal — contenedor de vistas y barra de herramientas (T017, T037).
+"""Aplicación principal — contenedor de vistas y barra de herramientas (T017, T037, T039).
 
 Responsabilidades:
   - Gestionar la navegación entre vistas (show_view).
@@ -6,12 +6,25 @@ Responsabilidades:
   - Recibir el callback de auto-bloqueo desde VaultService y volver a UnlockView.
   - Registrar toda actividad del usuario (tecla, clic, scroll) para reiniciar el
     temporizador de inactividad (record_activity) — T037, US7 Sc3.
+  - Cargar/guardar AppSettings y proporcionar el diálogo de Configuración — T039.
 
 Constitución: Principio VII — UX consistente; Principio VIII — rendimiento UI.
 """
 import tkinter as tk
+from pathlib import Path
+from tkinter import messagebox
 from typing import TYPE_CHECKING, Type
 
+from vault.models import (
+    APP_CONFIG_PATH,
+    AppSettings,
+    AUTO_LOCK_TIMEOUT_MAX,
+    AUTO_LOCK_TIMEOUT_MIN,
+    CLIPBOARD_TIMEOUT_MAX,
+    CLIPBOARD_TIMEOUT_MIN,
+    load_settings,
+    save_settings,
+)
 from vault.service import VaultService
 
 if TYPE_CHECKING:
@@ -26,6 +39,12 @@ class App(tk.Frame):
         self.root = root
         self.service = service
         self._current_view: tk.Widget | None = None
+
+        # Cargar configuración de usuario (T038/T039).
+        # Usa ruta por defecto (~/.config/vault-manager/settings.json).
+        self.settings: AppSettings = load_settings()
+        # Aplicar timeout de auto-bloqueo leído de settings
+        service.set_auto_lock_timeout(self.settings.auto_lock_timeout_s)
 
         self.pack(fill=tk.BOTH, expand=True)
         self._build_toolbar()
@@ -78,6 +97,17 @@ class App(tk.Frame):
             fg="white",
             font=("", 11, "bold"),
         ).pack(side=tk.LEFT, padx=4)
+
+        # Botón de Configuración (T039) — siempre visible
+        tk.Button(
+            self._toolbar,
+            text="⚙ Configuración",
+            command=self._open_settings_dialog,
+            bg="#555555",
+            fg="white",
+            relief="flat",
+            cursor="hand2",
+        ).pack(side=tk.RIGHT, padx=8)
 
         self._lock_btn = tk.Button(
             self._toolbar,
@@ -137,3 +167,184 @@ class App(tk.Frame):
         clipboard.cancel_clipboard_timer(self.root)
         from ui.views.unlock_view import UnlockView
         self.show_view(UnlockView)
+
+    # ── Diálogo de Configuración (T039) ─────────────────────────────────────────
+
+    def _open_settings_dialog(self) -> None:
+        """Abre el diálogo modal de configuración de la aplicación.
+
+        Refs: T039 (plan.md Phase 10); FR-016 (timeout portapapeles);
+              FR-017 (timeout auto-bloqueo).
+        """
+        _SettingsDialog(self.root, self)
+
+
+# ── Diálogo de Configuración (interno, T039) ──────────────────────────────────
+
+
+class _SettingsDialog(tk.Toplevel):
+    """Ventana modal de configuración de la aplicación.
+
+    Permite al usuario ajustar:
+      - Timeout de borrado del portapapeles (5–300 s) — FR-016, C-004.
+      - Timeout de auto-bloqueo por inactividad (60–3600 s) — FR-017.
+
+    Al guardar, persiste AppSettings en disco y actualiza VaultService.
+
+    Refs: T039 (plan.md Phase 10).
+    """
+
+    def __init__(self, parent: tk.Tk, app: "App") -> None:
+        super().__init__(parent)
+        self.withdraw()          # ocultar hasta estar posicionada (Fix 1)
+        self._app = app
+        self.title("Configuración")
+        self.resizable(False, False)
+
+        self._build_ui()
+
+        # Centrar sobre la ventana raíz antes de mostrar
+        self.update_idletasks()
+        px = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{px}+{py}")
+
+        self.deiconify()         # mostrar ya centrada (Fix 1)
+        self.wait_visibility()
+        self.grab_set()
+        self.focus_set()
+
+    def _build_ui(self) -> None:
+        s = self._app.settings
+        pad = {"padx": 12, "pady": 6}
+        container = tk.Frame(self, padx=16, pady=14)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        # ── Timeout portapapeles (FR-016, C-004) ──────────────────────────────
+        tk.Label(
+            container,
+            text="Borrado de portapapeles (s):",
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", **pad)
+
+        self._clip_var = tk.IntVar(value=s.clipboard_timeout_s)
+        tk.Spinbox(
+            container,
+            from_=CLIPBOARD_TIMEOUT_MIN,
+            to=CLIPBOARD_TIMEOUT_MAX,
+            textvariable=self._clip_var,
+            width=7,
+        ).grid(row=0, column=1, sticky="w", **pad)
+
+        tk.Label(
+            container,
+            text=f"({CLIPBOARD_TIMEOUT_MIN}–{CLIPBOARD_TIMEOUT_MAX} s)",
+            fg="gray",
+            font=("", 8),
+            anchor="w",
+        ).grid(row=0, column=2, sticky="w")
+
+        # ── Timeout auto-bloqueo (FR-017) ─────────────────────────────────────
+        tk.Label(
+            container,
+            text="Auto-bloqueo por inactividad (s):",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", **pad)
+
+        self._lock_var = tk.IntVar(value=s.auto_lock_timeout_s)
+        tk.Spinbox(
+            container,
+            from_=AUTO_LOCK_TIMEOUT_MIN,
+            to=AUTO_LOCK_TIMEOUT_MAX,
+            textvariable=self._lock_var,
+            width=7,
+        ).grid(row=1, column=1, sticky="w", **pad)
+
+        tk.Label(
+            container,
+            text=f"({AUTO_LOCK_TIMEOUT_MIN}–{AUTO_LOCK_TIMEOUT_MAX} s)",
+            fg="gray",
+            font=("", 8),
+            anchor="w",
+        ).grid(row=1, column=2, sticky="w")
+
+        container.columnconfigure(0, weight=1)
+
+        # ── Botones ───────────────────────────────────────────────────────────
+        btn_frame = tk.Frame(container)
+        btn_frame.grid(row=2, column=0, columnspan=3, pady=(14, 0), sticky="e")
+
+        tk.Button(
+            btn_frame,
+            text="Cancelar",
+            width=10,
+            command=self.destroy,
+            cursor="hand2",
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        tk.Button(
+            btn_frame,
+            text="Guardar",
+            width=10,
+            command=self._on_save,
+            cursor="hand2",
+            bg="#2980b9",
+            fg="white",
+            relief="flat",
+        ).pack(side=tk.RIGHT)
+
+    def _on_save(self) -> None:
+        """Valida, persiste y aplica la nueva configuración.
+
+        Refs: T039 — «Guardar persiste AppSettings, actualiza VaultService».
+        """
+        try:
+            clip = int(self._clip_var.get())
+            lock = int(self._lock_var.get())
+        except (ValueError, tk.TclError):
+            messagebox.showerror(
+                "Valor inválido",
+                "Los valores deben ser números enteros.",
+                parent=self,
+            )
+            return
+
+        if not (CLIPBOARD_TIMEOUT_MIN <= clip <= CLIPBOARD_TIMEOUT_MAX):
+            messagebox.showerror(
+                "Valor fuera de rango",
+                f"El timeout del portapapeles debe estar entre "
+                f"{CLIPBOARD_TIMEOUT_MIN} y {CLIPBOARD_TIMEOUT_MAX} s.",
+                parent=self,
+            )
+            return
+
+        if not (AUTO_LOCK_TIMEOUT_MIN <= lock <= AUTO_LOCK_TIMEOUT_MAX):
+            messagebox.showerror(
+                "Valor fuera de rango",
+                f"El timeout de auto-bloqueo debe estar entre "
+                f"{AUTO_LOCK_TIMEOUT_MIN} y {AUTO_LOCK_TIMEOUT_MAX} s.",
+                parent=self,
+            )
+            return
+
+        # Persistir en disco
+        new_settings = AppSettings(
+            clipboard_timeout_s=clip,
+            auto_lock_timeout_s=lock,
+        )
+        try:
+            save_settings(APP_CONFIG_PATH, new_settings)
+        except OSError as exc:
+            messagebox.showerror(
+                "Error al guardar",
+                f"No se pudo guardar la configuración:\n{exc}",
+                parent=self,
+            )
+            return
+
+        # Actualizar App y VaultService en caliente
+        self._app.settings = new_settings
+        self._app.service.set_auto_lock_timeout(lock)
+
+        self.destroy()
+

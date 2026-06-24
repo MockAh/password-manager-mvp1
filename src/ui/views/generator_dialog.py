@@ -38,17 +38,25 @@ class GeneratorDialog(tk.Toplevel):
 
     def __init__(self, parent: tk.Widget, on_use: Callable[[str], None]) -> None:
         super().__init__(parent)
+        self.withdraw()          # ocultar hasta estar posicionada (Fix 1: sin parpadeo)
         self.title("Generador de contraseñas")
         self.resizable(False, False)
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
 
         self._on_use = on_use
         self._generated: str = ""
 
         self._build_ui()
         self._update_generate_btn()
+
+        # Centrar sobre el padre y mostrar ya posicionado (Fix 1)
+        self.update_idletasks()
+        pw = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
+        ph = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{pw}+{ph}")
+        self.deiconify()
+        self.wait_visibility()
+        self.grab_set()
+        self.focus_set()
 
     # ── Construcción de la UI ─────────────────────────────────────────────────
 

@@ -15,7 +15,7 @@ Refs: spec.md → US2 Acceptance Scenarios 1–2; US6 Acceptance Scenarios 2–3
       data-model.md → EntryRecord, FolderRecord.
 """
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Callable, Optional
 
 from vault.exceptions import FolderNotFoundError
@@ -47,6 +47,7 @@ class EntryFormView(tk.Toplevel):
         active_folder_id: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
+        self.withdraw()          # ocultar hasta estar posicionada (Fix 1: sin parpadeo)
         self._app = app
         self._entry = entry
         self._on_saved = on_saved
@@ -58,9 +59,6 @@ class EntryFormView(tk.Toplevel):
         title_text = "Editar entrada" if entry else "Nueva entrada"
         self.title(title_text)
         self.resizable(False, False)
-        self.wait_visibility()
-        self.grab_set()          # modal — bloquea la ventana padre
-        self.focus_set()
 
         self._build_ui()
         if entry:
@@ -70,11 +68,15 @@ class EntryFormView(tk.Toplevel):
             # _active_folder_id se usa en _build_ui → _folder_var se puede sobrescribir aquí.
             self._preselect_folder(active_folder_id)
 
-        # Centrar sobre la ventana raíz
+        # Centrar sobre la ventana raíz y mostrar ya posicionada (Fix 1)
         self.update_idletasks()
         rx = app.root.winfo_x() + (app.root.winfo_width() - self.winfo_width()) // 2
         ry = app.root.winfo_y() + (app.root.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{rx}+{ry}")
+        self.deiconify()
+        self.wait_visibility()
+        self.grab_set()          # modal — bloquea la ventana padre
+        self.focus_set()
 
     # ── Construcción de la UI ─────────────────────────────────────────────────
 
@@ -295,10 +297,10 @@ class EntryFormView(tk.Toplevel):
                     folder_id=folder_id,
                 )
         except FolderNotFoundError as exc:
-            tk.messagebox.showerror("Error", str(exc), parent=self)
+            messagebox.showerror("Error", str(exc), parent=self)
             return
         except Exception as exc:
-            tk.messagebox.showerror("Error inesperado", str(exc), parent=self)
+            messagebox.showerror("Error inesperado", str(exc), parent=self)
             return
 
         if self._on_saved:
