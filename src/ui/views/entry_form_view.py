@@ -1,4 +1,4 @@
-"""Formulario de entrada — crear o editar una credencial (T021).
+"""Formulario de entrada — crear o editar una credencial (T021, T034).
 
 Responsabilidades:
   - Presentar campos de EntryRecord: title (obligatorio), username, password,
@@ -7,10 +7,12 @@ Responsabilidades:
   - Modo edición: llama a VaultService.update_entry() al guardar.
   - Validación de título no vacío con mensaje rojo.
   - Toggle de visibilidad de contraseña.
-  - Selector de carpeta poblado con get_folders() (US6 preparado).
+  - Selector de carpeta poblado con get_folders() (US6, T034).
+  - Preselecciona la carpeta activa si se abre desde una vista de carpeta (T034).
 
 Constitución: Principio VII — confirmación explícita de acciones; mensajes en español.
-Refs: spec.md → US2 Acceptance Scenarios 1–2; data-model.md → EntryRecord.
+Refs: spec.md → US2 Acceptance Scenarios 1–2; US6 Acceptance Scenarios 2–3;
+      data-model.md → EntryRecord, FolderRecord.
 """
 import tkinter as tk
 from tkinter import ttk
@@ -27,10 +29,13 @@ class EntryFormView(tk.Toplevel):
     """Ventana de diálogo para crear o editar una entrada de credencial.
 
     Args:
-        parent:      Widget padre (normalmente App o MainView).
-        app:         Instancia de App (acceso a VaultService y navegación).
-        entry:       EntryRecord a editar; None para modo creación.
-        on_saved:    Callback llamado tras guardar exitosamente (para refrescar lista).
+        parent:           Widget padre (normalmente App o MainView).
+        app:              Instancia de App (acceso a VaultService y navegación).
+        entry:            EntryRecord a editar; None para modo creación.
+        on_saved:         Callback llamado tras guardar exitosamente.
+        active_folder_id: Carpeta activa en la MainView al abrir el formulario.
+                          Solo se usa en modo creación para preseleccionar la
+                          carpeta en el OptionMenu (T034).
     """
 
     def __init__(
@@ -39,12 +44,16 @@ class EntryFormView(tk.Toplevel):
         app: "App",
         entry: Optional["EntryRecord"] = None,
         on_saved: Optional[Callable[[], None]] = None,
+        active_folder_id: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self._app = app
         self._entry = entry
         self._on_saved = on_saved
         self._password_visible = False
+        # Carpeta a preseleccionar en modo creación (T034 — US6 Sc2/3).
+        # None → «Sin carpeta»; UUID → carpeta concreta.
+        self._active_folder_id = active_folder_id
 
         title_text = "Editar entrada" if entry else "Nueva entrada"
         self.title(title_text)
@@ -56,6 +65,10 @@ class EntryFormView(tk.Toplevel):
         self._build_ui()
         if entry:
             self._populate(entry)
+        elif active_folder_id is not None:
+            # Modo creación desde una carpeta: preseleccionar la carpeta activa.
+            # _active_folder_id se usa en _build_ui → _folder_var se puede sobrescribir aquí.
+            self._preselect_folder(active_folder_id)
 
         # Centrar sobre la ventana raíz
         self.update_idletasks()
@@ -198,7 +211,7 @@ class EntryFormView(tk.Toplevel):
         """Construye lista de (etiqueta, folder_id | None) para el OptionMenu.
 
         'Sin carpeta' mapea a None. Cada carpeta usa su UUID como value.
-        Ref: data-model.md → folder_id puede ser null.
+        Ref: data-model.md → folder_id puede ser null; US6 T034 (poblar selector).
         """
         options: list[tuple[str, Optional[str]]] = [("Sin carpeta", None)]
         try:
@@ -215,6 +228,20 @@ class EntryFormView(tk.Toplevel):
                 return fid
         return None
 
+    def _preselect_folder(self, folder_id: Optional[str]) -> None:
+        """Selecciona la carpeta indicada en el OptionMenu.
+
+        Ref: T034 — preseleccionar carpeta activa al abrir formulario en modo creación
+             desde una vista de carpeta (US6 Acceptance Scenario 2).
+
+        Args:
+            folder_id: UUID de la carpeta a preseleccionar; None → «Sin carpeta».
+        """
+        for label, fid in self._folder_options:
+            if fid == folder_id:
+                self._folder_var.set(label)
+                return
+
     def _populate(self, entry: "EntryRecord") -> None:
         """Rellena el formulario con los datos de una entrada existente."""
         self._title_var.set(entry.title)
@@ -222,11 +249,8 @@ class EntryFormView(tk.Toplevel):
         self._password_var.set(entry.password)
         self._url_var.set(entry.url or "")
         self._notes_text.insert("1.0", entry.notes or "")
-        # Preseleccionar carpeta
-        for label, fid in self._folder_options:
-            if fid == entry.folder_id:
-                self._folder_var.set(label)
-                break
+        # Preseleccionar la carpeta de la entrada (edición) — US6 Sc2.
+        self._preselect_folder(entry.folder_id)
 
     # ── Guardar ───────────────────────────────────────────────────────────────
 

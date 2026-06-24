@@ -38,8 +38,9 @@ from vault.exceptions import (
     WrongPasswordError,
     EntryNotFoundError,
     FolderNotFoundError,
+    DuplicateFolderNameError,
 )
-from vault.models import EntryRecord, VaultPayload, VaultSession
+from vault.models import EntryRecord, FolderRecord, VaultPayload, VaultSession
 
 # ── Constantes de formato ─────────────────────────────────────────────────────
 
@@ -397,6 +398,93 @@ class VaultService:
             e for e in session.payload.entries
             if needle in e.title.casefold() or needle in e.username.casefold()
         ]
+
+    # ── Gestión de carpetas (US6) ─────────────────────────────────────────────
+
+    def get_folders(self) -> list:
+        """Devuelve todas las carpetas de la bóveda.
+
+        Refs: FR-014 (listar carpetas), US6 Acceptance Scenario 3.
+              contracts/vault-service-interface.md → get_folders.
+
+        Raises:
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        return list(session.payload.folders)
+
+    def add_folder(self, name: str) -> "FolderRecord":
+        """Crea una nueva carpeta con el nombre dado y persiste la bóveda.
+
+        Carpetas planas (sin anidamiento) — Clarificación C-003.
+        Comparación de nombre duplicado es case-sensitive.
+
+        Refs: FR-014 (crear carpeta), US6 Acceptance Scenario 1.
+              contracts/vault-service-interface.md → add_folder.
+              data-model.md → FolderRecord.
+
+        Args:
+            name: Nombre de la carpeta. Se aplica strip(); no vacío; máx 255 chars.
+
+        Raises:
+            ValueError: si name está vacío o supera 255 caracteres.
+            DuplicateFolderNameError: si ya existe una carpeta con el mismo nombre.
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        name = name.strip()
+        if not name:
+            raise ValueError("El nombre de la carpeta no puede estar vacío.")
+        if len(name) > 255:
+            raise ValueError(
+                "El nombre de la carpeta no puede superar 255 caracteres."
+            )
+        if any(f.name == name for f in session.payload.folders):
+            raise DuplicateFolderNameError(
+                f"Ya existe una carpeta con el nombre: {name!r}"
+            )
+        folder = FolderRecord.create(name)
+        session.payload.folders.append(folder)
+        self._save()
+        return folder
+
+    def delete_folder(self, folder_id: str) -> int:
+        """Elimina una carpeta y reasigna sus entradas a «Sin carpeta».
+
+        Las entradas cuyo folder_id coincida con folder_id pasan a folder_id=None.
+        Esto cumple la Clarificación C-003: eliminar una carpeta nunca elimina
+        las entradas que contenía.
+
+        Refs: US6 Acceptance Scenario 4, C-003 (entradas pasan a "Sin carpeta").
+              contracts/vault-service-interface.md → delete_folder.
+              Principio VII — confirmación destructiva (la confirmación se hace en la UI).
+
+        Args:
+            folder_id: UUID de la carpeta a eliminar.
+
+        Returns:
+            Número de entradas reasignadas a «Sin carpeta».
+
+        Raises:
+            FolderNotFoundError: si folder_id no existe.
+            VaultLockedError: si la bóveda está bloqueada.
+        """
+        session = self._require_unlocked()
+        folder = next(
+            (f for f in session.payload.folders if f.id == folder_id), None
+        )
+        if folder is None:
+            raise FolderNotFoundError(
+                f"No existe ninguna carpeta con id: {folder_id}"
+            )
+        count = 0
+        for entry in session.payload.entries:
+            if entry.folder_id == folder_id:
+                entry.folder_id = None
+                count += 1
+        session.payload.folders.remove(folder)
+        self._save()
+        return count
 
     # ── Ayudantes internos ────────────────────────────────────────────────────
 

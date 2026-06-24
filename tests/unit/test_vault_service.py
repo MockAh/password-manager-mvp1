@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from vault.exceptions import (
+    DuplicateFolderNameError,
     EntryNotFoundError,
     FolderNotFoundError,
     VaultAlreadyExistsError,
@@ -498,3 +499,203 @@ class TestSearchEntries:
         svc = VaultService(auto_lock_timeout_s=0)
         with pytest.raises(VaultLockedError):
             svc.search_entries("algo")
+
+
+# ── Gestión de carpetas (T032 — US6) ─────────────────────────────────────────
+
+
+class TestFolderCRUD:
+    """Tests de gestión de carpetas — US6, tareas T031–T032.
+
+    Refs: spec.md → User Story 6 (Acceptance Scenarios 1–4).
+          data-model.md → FolderRecord.
+          contracts/vault-service-interface.md → get_folders, add_folder, delete_folder.
+          Clarificación C-003: eliminar carpeta mueve entradas a "Sin carpeta", no las elimina.
+    """
+
+    @pytest.fixture
+    def svc_open(self, tmp_path):
+        """VaultService con bóveda ya creada y desbloqueada."""
+        svc = VaultService(auto_lock_timeout_s=0)
+        path = tmp_path / "folders.vault"
+        svc.create_vault(path, PASSWORD)
+        return svc, path
+
+    # ── add_folder ────────────────────────────────────────────────────────────
+
+    def test_add_folder_returns_folder_record(self, svc_open):
+        """add_folder devuelve FolderRecord con UUID y nombre asignados.
+        Ref: data-model.md → FolderRecord.id UUID4; US6 Acceptance Scenario 1."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Trabajo")
+        assert folder.id
+        assert folder.name == "Trabajo"
+
+    def test_add_folder_appears_in_get_folders(self, svc_open):
+        """La carpeta creada es visible en get_folders().
+        Ref: US6 Acceptance Scenario 1."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Personal")
+        folders = svc.get_folders()
+        assert any(f.id == folder.id for f in folders)
+
+    def test_add_folder_strips_name(self, svc_open):
+        """El nombre se limpia de espacios externos antes de guardar."""
+        svc, _ = svc_open
+        folder = svc.add_folder("  Trabajo  ")
+        assert folder.name == "Trabajo"
+
+    def test_add_folder_empty_name_raises(self, svc_open):
+        """Nombre vacío lanza ValueError.
+        Ref: contracts/vault-service-interface.md → add_folder."""
+        svc, _ = svc_open
+        with pytest.raises(ValueError):
+            svc.add_folder("")
+
+    def test_add_folder_whitespace_only_raises(self, svc_open):
+        """Nombre compuesto solo de espacios (→ vacío tras strip) lanza ValueError."""
+        svc, _ = svc_open
+        with pytest.raises(ValueError):
+            svc.add_folder("   ")
+
+    def test_add_folder_name_too_long_raises(self, svc_open):
+        """Nombre > 255 caracteres lanza ValueError.
+        Ref: contracts/vault-service-interface.md → add_folder."""
+        svc, _ = svc_open
+        with pytest.raises(ValueError):
+            svc.add_folder("x" * 256)
+
+    def test_add_folder_name_255_chars_ok(self, svc_open):
+        """Nombre de exactamente 255 caracteres es aceptado (boundary)."""
+        svc, _ = svc_open
+        folder = svc.add_folder("x" * 255)
+        assert folder.name == "x" * 255
+
+    def test_add_folder_duplicate_name_raises(self, svc_open):
+        """Nombre duplicado lanza DuplicateFolderNameError.
+        Ref: contracts/vault-service-interface.md → add_folder;
+             US6 — nombres de carpeta deben ser únicos."""
+        svc, _ = svc_open
+        svc.add_folder("Duplicado")
+        with pytest.raises(DuplicateFolderNameError):
+            svc.add_folder("Duplicado")
+
+    def test_add_folder_persists_after_lock_unlock(self, svc_open):
+        """Las carpetas persisten tras bloquear y desbloquear la bóveda.
+        Ref: US6 Acceptance Scenario 1 — persistencia."""
+        svc, path = svc_open
+        folder = svc.add_folder("Finanzas")
+        svc.lock_vault()
+        svc.unlock_vault(path, PASSWORD)
+        names = [f.name for f in svc.get_folders()]
+        assert "Finanzas" in names
+
+    # ── delete_folder ─────────────────────────────────────────────────────────
+
+    def test_delete_folder_removes_it_from_get_folders(self, svc_open):
+        """delete_folder elimina la carpeta de la lista.
+        Ref: US6 Acceptance Scenario 4."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Temporal")
+        svc.delete_folder(folder.id)
+        assert not any(f.id == folder.id for f in svc.get_folders())
+
+    def test_delete_folder_moves_entries_to_no_folder(self, svc_open):
+        """Las entradas de la carpeta eliminada pasan a folder_id=None.
+        Ref: Clarificación C-003; US6 Acceptance Scenario 4."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Trabajo")
+        e1 = svc.add_entry("Jira", folder_id=folder.id)
+        e2 = svc.add_entry("Confluence", folder_id=folder.id)
+
+        count = svc.delete_folder(folder.id)
+
+        assert count == 2
+        # Las entradas aún existen en la bóveda, ahora sin carpeta.
+        all_entries = svc.get_entries()
+        ids = [e.id for e in all_entries]
+        assert e1.id in ids
+        assert e2.id in ids
+        # folder_id debe ser None para las entradas movidas.
+        for entry in all_entries:
+            if entry.id in (e1.id, e2.id):
+                assert entry.folder_id is None
+
+    def test_delete_folder_returns_correct_count(self, svc_open):
+        """delete_folder devuelve el número exacto de entradas movidas.
+        Ref: contracts/vault-service-interface.md → delete_folder (return value)."""
+        svc, _ = svc_open
+        f1 = svc.add_folder("F1")
+        f2 = svc.add_folder("F2")
+        svc.add_entry("A", folder_id=f1.id)
+        svc.add_entry("B", folder_id=f1.id)
+        svc.add_entry("C", folder_id=f2.id)
+        svc.add_entry("D")  # sin carpeta
+
+        count_f1 = svc.delete_folder(f1.id)
+        assert count_f1 == 2
+
+        count_f2 = svc.delete_folder(f2.id)
+        assert count_f2 == 1
+
+    def test_delete_empty_folder_returns_zero(self, svc_open):
+        """Eliminar carpeta vacía no lanza error y devuelve 0.
+        Ref: contracts/vault-service-interface.md → delete_folder."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Vacía")
+        count = svc.delete_folder(folder.id)
+        assert count == 0
+
+    def test_delete_folder_nonexistent_raises(self, svc_open):
+        """ID inexistente lanza FolderNotFoundError.
+        Ref: contracts/vault-service-interface.md → delete_folder."""
+        svc, _ = svc_open
+        with pytest.raises(FolderNotFoundError):
+            svc.delete_folder("uuid-no-existe")
+
+    def test_entries_in_deleted_folder_accessible_via_no_folder(self, svc_open):
+        """Tras eliminar la carpeta, sus entradas son visibles en get_entries(NO_FOLDER).
+        Ref: C-003; US6 Acceptance Scenario 4 — entradas accesibles sin carpeta."""
+        svc, _ = svc_open
+        folder = svc.add_folder("Temporal")
+        svc.add_entry("Entrada1", folder_id=folder.id)
+        svc.add_entry("Entrada2", folder_id=folder.id)
+        svc.add_entry("SinCarpetaAntes")  # ya en NO_FOLDER
+
+        svc.delete_folder(folder.id)
+
+        sin_carpeta = svc.get_entries(folder_id=NO_FOLDER)
+        titles = {e.title for e in sin_carpeta}
+        assert "Entrada1" in titles
+        assert "Entrada2" in titles
+        assert "SinCarpetaAntes" in titles
+
+    def test_delete_folder_does_not_affect_other_folders_entries(self, svc_open):
+        """Eliminar una carpeta no toca entradas de otras carpetas."""
+        svc, _ = svc_open
+        f1 = svc.add_folder("Conservar")
+        f2 = svc.add_folder("Eliminar")
+        svc.add_entry("EnF1", folder_id=f1.id)
+        svc.add_entry("EnF2", folder_id=f2.id)
+
+        svc.delete_folder(f2.id)
+
+        en_f1 = svc.get_entries(folder_id=f1.id)
+        assert len(en_f1) == 1
+        assert en_f1[0].title == "EnF1"
+        assert en_f1[0].folder_id == f1.id  # sin cambios
+
+    # ── get_folders ───────────────────────────────────────────────────────────
+
+    def test_get_folders_locked_raises(self):
+        """get_folders sobre bóveda bloqueada lanza VaultLockedError.
+        Ref: contracts/vault-service-interface.md → get_folders."""
+        svc = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(VaultLockedError):
+            svc.get_folders()
+
+    def test_get_folders_empty_when_no_folders(self, svc_open):
+        """Bóveda recién creada no tiene carpetas."""
+        svc, _ = svc_open
+        assert svc.get_folders() == []
+
