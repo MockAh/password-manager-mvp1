@@ -42,13 +42,13 @@ y del diálogo modal (FR-021).
 
 ### Tests para User Story 1 *(escribir ANTES de la implementación — deben FALLAR)*
 
-- [ ] T004 [P] [US1] Escribir tests T-R01, T-R02, T-R03 en `tests/unit/test_vault_service.py`: T-R01 verifica que el salt en los metadatos es distinto al anterior tras la rotación; T-R02 verifica que `unlock_vault` con la nueva contraseña abre la bóveda con entradas intactas; T-R03 verifica que `unlock_vault` con la contraseña anterior lanza `WrongPasswordError` · FR-006 · NFR-001 · SC-001
+- [ ] T004 [P] [US1] Escribir tests T-R01, T-R02, T-R03 y T-R20 en `tests/unit/test_vault_service.py`: T-R01 verifica que el salt en los metadatos es distinto al anterior tras la rotación; T-R02 verifica que `unlock_vault` con la nueva contraseña abre la bóveda con entradas intactas; T-R03 verifica que `unlock_vault` con la contraseña anterior lanza `WrongPasswordError`; T-R20 lee el campo `nonce` del archivo de bóveda antes y después de la rotación y verifica que difieren (nonce único por llave) · FR-006 · FR-008 · NFR-001 · SC-001
 - [ ] T005 [P] [US1] Escribir test T-R04 en `tests/unit/test_vault_service.py`: verificar que tras `change_master_password` exitoso `service.is_unlocked` es `True` y `service._session.derived_key` contiene la llave nueva (distinta de la antigua) · FR-016
 - [ ] T006 [P] [US1] Escribir tests T-R18 y T-R19 en `tests/integration/test_vault_roundtrip.py`: T-R18 roundtrip completo (crear bóveda → añadir entradas → rotar → cerrar → reabrir con nueva maestra → verificar entradas); T-R19 doble rotación consecutiva verificando que los dos salts generados son distintos entre sí y distintos al original · NFR-001 · SC-001
 
 ### Implementación de User Story 1
 
-- [ ] T007 [US1] Implementar `change_master_password(self, current_password: str, new_password: str) -> None` en `src/vault/service.py` siguiendo el contrato completo de `contracts/vault-service-interface.md`: (1) `_require_unlocked()`; (2) validaciones baratas (vacío, longitud < 12, identidad); (3) re-derivar llave candidata con `derive_key(current_password, b64decode(session.salt_b64))` + comparar con `hmac.compare_digest` → `WrongPasswordError("Contraseña maestra actual incorrecta.")` si falla; (4) `zero(candidata)` en bloque `finally`; (5) `new_salt = generate_salt()`; (6) `new_key = derive_key(new_password, new_salt)` con los mismos `kdf_params` (FR-017); (7) construir `new_envelope_meta`; (8) `encrypt(plaintext, new_key, new_envelope_meta)` con nonce nuevo; (9) `repository.save_vault_file(path, vault_data)` (commit atómico); (10) `zero(session.derived_key)` sobre la referencia original del objeto en sesión; (11) `session.derived_key = new_key`; `session.salt_b64 = new_salt_b64`; en excepción post-paso-6: `zero(new_key)` en `finally` · FR-003 · FR-006 · FR-007 · FR-008 · FR-009 · FR-010 · FR-011 · FR-013 · FR-016 · FR-017 · NFR-001 · NFR-002 · NFR-003 · NFR-004
+- [ ] T007 [US1] Implementar `change_master_password(self, current_password: str, new_password: str) -> None` en `src/vault/service.py`: **primero** añadir un esqueleto con `raise NotImplementedError` para que todos los tests (T-R01–T-R17, T-R20) sean importables y fallen por comportamiento, no por `ImportError`; **luego** completar la implementación completa siguiendo `contracts/vault-service-interface.md`: (1) `_require_unlocked()`; (2) validaciones baratas (vacío, longitud < 12, identidad); (3) re-derivar llave candidata con `derive_key(current_password, b64decode(session.salt_b64))` + comparar con `hmac.compare_digest` → `WrongPasswordError("Contraseña maestra actual incorrecta.")` si falla; (4) `zero(candidata)` en bloque `finally`; (5) `new_salt = generate_salt()`; (6) `new_key = derive_key(new_password, new_salt)` con los mismos `kdf_params` (FR-017); (7) construir `new_envelope_meta`; (8) `encrypt(plaintext, new_key, new_envelope_meta)` con nonce nuevo; (9) `repository.save_vault_file(path, vault_data)` (commit atómico); (10) `zero(session.derived_key)` sobre la referencia original del objeto en sesión; (11) `session.derived_key = new_key`; `session.salt_b64 = new_salt_b64`; en excepción post-paso-6: `zero(new_key)` en `finally` · FR-003 · FR-006 · FR-007 · FR-008 · FR-009 · FR-010 · FR-011 · FR-013 · FR-016 · FR-017 · NFR-001 · NFR-002 · NFR-003 · NFR-004
 
 **Checkpoint**: US1 MVP completo — rotación exitosa funciona end-to-end; T-R01–T-R04, T-R18, T-R19 pasan
 
@@ -60,10 +60,10 @@ y del diálogo modal (FR-021).
 
 **Independent Test**: `uv run pytest tests/unit/test_vault_service.py -k "wrong_current or locked" -v`
 
-### Tests para User Story 2 *(escribir ANTES — los tests T-R11 y T-R15 aún fallan si T007 no existe)*
+### Tests para User Story 2 *(escribir en paralelo con los tests de US1, antes de la implementación completa de T007)*
 
 - [ ] T008 [P] [US2] Escribir test T-R11 en `tests/unit/test_vault_service.py`: llamar a `change_master_password` con contraseña actual incorrecta verifica que (a) se lanza `WrongPasswordError`, (b) el mensaje de excepción es "Contraseña maestra actual incorrecta." (no el mensaje genérico de desbloqueo), (c) el archivo de bóveda permanece byte a byte idéntico al estado previo · FR-003 · FR-004 · NFR-007 · SC-003
-- [ ] T009 [P] [US2] Escribir test T-R15 en `tests/unit/test_vault_service.py`: llamar a `change_master_password` con la bóveda bloqueada verifica que se lanza `VaultLockedError` sin ningún acceso a disco · FR-001
+- [ ] T009 [P] [US2] Escribir test T-R15 en `tests/unit/test_vault_service.py`: (a) llamar a `change_master_password` con la bóveda bloqueada verifica que se lanza `VaultLockedError` sin ningún acceso a disco; (b) llamar con `current_password=""` (bóveda desbloqueada) verifica que se lanza `WrongPasswordError` antes de cualquier operación de re-cifrado — la re-autenticación no puede omitirse con una cadena vacía · FR-001 · FR-002
 
 **Checkpoint**: US2 completo — re-auth verificada; T-R11, T-R15 pasan tras T007
 
@@ -77,7 +77,7 @@ y del diálogo modal (FR-021).
 
 ### Tests para User Story 3
 
-- [ ] T010 [P] [US3] Escribir test T-R07 en `tests/unit/test_vault_service.py`: parchear `repository.save_vault_file` para lanzar `OSError` antes del `os.replace`; verificar que el archivo original sigue existiendo, es descifrable con la contraseña anterior, y no hay archivos temporales residuales en el directorio · NFR-002 · FR-011 · FR-012 · SC-002
+- [ ] T010 [P] [US3] Escribir test T-R07 en `tests/unit/test_vault_service.py`: parchear `os.replace` directamente (no `repository.save_vault_file`) para lanzar `OSError`, simulando el escenario “archivo temporal completamente escrito pero reemplazo fallido”; verificar que (a) el archivo temporal es eliminado por el mecanismo de limpieza de `save_vault_file`, (b) el archivo original permanece intacto y sigue siendo descifrable con la contraseña anterior, y (c) no quedan archivos temporales residuales en el directorio · NFR-002 · FR-011 · FR-012 · SC-002
 - [ ] T011 [P] [US3] Escribir test T-R08 en `tests/unit/test_vault_service.py`: simular interrupción inmediatamente después del commit (mockear la actualización de sesión post-replace); verificar que el archivo en disco es el nuevo y es descifrable con la nueva contraseña · NFR-002 · SC-002
 - [ ] T012 [P] [US3] Escribir tests T-R09 y T-R10 en `tests/unit/test_vault_service.py`: T-R09 modifica `kdf_params.memory_cost` en el archivo re-cifrado y verifica que `unlock_vault` lanza `WrongPasswordError` (fallo de tag GCM por AAD inválida); T-R10 modifica el campo `salt` en los metadatos y verifica el mismo fallo · NFR-003 · FR-009 · SC-004
 - [ ] T013 [US3] Escribir test T-R17 en `tests/unit/test_vault_service.py`: configurar `VaultService` con timeout de auto-bloqueo de 1 segundo; llamar a `suspend_auto_lock()`, esperar 1.5 s, verificar que la bóveda sigue desbloqueada; llamar a `resume_auto_lock()` y verificar que el timer se reinicia desde cero · FR-021 · US3 Ac. Sc. 5 (depends on T003)
@@ -148,16 +148,14 @@ y del diálogo modal (FR-021).
 ```
 T001
   └── T002 → T003
-              └── T004, T005, T006 (paralelas entre sí)
-                  └── T007
-                      ├── T008, T009 (US2 — paralelas)
-                      ├── T010, T011, T012 (US3 — paralelas)
-                      │   └── T013 (US3 autolock — depends T003)
-                      ├── T014, T015 (US5 — paralelas)
-                      ├── T016, T017 (US4 — paralelas)
-                      │   └── T018
-                      └── T019
-                          └── T020 (depends T003)
+              ├── [Escribir todos los tests de servicio — paralelas entre sí, deben FALLAR]
+              │   T004, T005, T006 (US1) · T008, T009 (US2)
+              │   T010, T011, T012 (US3) · T014, T015 (US5) · T016, T017 (US4)
+              │   T013 (US3 autolock — depends T003 directamente, no T007)
+              └── T007 (esqueleto mínimo primero; implementación completa tras todos los tests en rojo)
+                  ├── T018
+                  └── T019
+                      └── T020 (depends T003)
                               ├── T021
                               └── T022
 T023 (puede hacerse al final, no bloquea nada)
@@ -165,10 +163,12 @@ T023 (puede hacerse al final, no bloquea nada)
 
 ## Parallel Execution Examples
 
-**Tras T003** (foundational completa), las siguientes pueden avanzar en paralelo:
-- T004 + T005 + T006 (escribir tests de US1 en archivos distintos o secciones distintas)
+**Tras T003** (foundational completa), las siguientes pueden avanzar en paralelo
+(todas antes de la implementación completa de T007):
+- T004 + T005 + T006 (escribir tests de US1)
 - T008 + T009 (tests US2)
 - T010 + T011 + T012 (tests US3)
+- T013 (test autolock US3 — depends T003, puede ir junto a los anteriores)
 - T014 + T015 (tests US5)
 - T016 + T017 (tests US4)
 - T019 (esqueleto del diálogo, independiente de los tests de servicio)
@@ -189,7 +189,7 @@ T023 (puede hacerse al final, no bloquea nada)
 | FR-003 + FR-004 (verificar maestra actual) | T-R11 | T008 |
 | FR-005 (confirmación coincidente) | pre-flight en diálogo | T020 |
 | FR-006 + NFR-001 (salt nuevo) | T-R01, T-R19 | T004, T006 |
-| FR-008 (nonce nuevo) | implícito en T-R01 (cifrado válido) | T004 |
+| FR-008 (nonce nuevo) | T-R20 (nonce distinto antes/después de rotar) | T004 |
 | FR-009 + NFR-003 (AAD) | T-R09, T-R10 | T012 |
 | FR-010 + FR-011 + NFR-002 (atómico) | T-R07, T-R08 | T010, T011 |
 | FR-012 + NFR-005 (sin residuos) | T-R06 | T015 |

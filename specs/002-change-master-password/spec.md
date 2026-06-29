@@ -221,8 +221,11 @@ archivo final con la contraseña anterior falle.
   re-autenticación, incluso cuando la sesión esté activa y la bóveda desbloqueada. Este paso no
   puede omitirse ni derivarse del estado de sesión existente.
 
-- **FR-003**: El sistema DEBE verificar la contraseña maestra actual contra el archivo de bóveda
-  antes de continuar con cualquier otra acción del flujo de cambio.
+- **FR-003**: El sistema DEBE verificar la contraseña maestra actual re-derivando una llave
+  candidata a partir de la contraseña introducida y de los parámetros KDF y salt ya presentes en
+  sesión (establecidos al desbloquear la bóveda), y comparando el resultado con la llave en
+  memoria mediante una comparación en tiempo constante. No se accede de nuevo al archivo de
+  bóveda ni se re-descifra el payload para esta verificación.
 
 - **FR-004**: Si la contraseña maestra actual introducida es incorrecta, el sistema DEBE rechazar
   la operación con un mensaje de error claro y dejar el archivo de bóveda byte a byte idéntico
@@ -232,25 +235,13 @@ archivo final con la contraseña anterior falle.
   independientes (nueva contraseña y confirmación) y validar que ambos coincidan exactamente antes
   de iniciar cualquier operación de re-cifrado.
 
-- **FR-018**: El sistema DEBE rechazar la nueva contraseña maestra si es idéntica a la
-  contraseña maestra actual. El rechazo ocurre en la validación del formulario, antes de
-  cualquier operación de re-cifrado, y va acompañado de un mensaje específico.
-
-- **FR-019**: El sistema DEBE exigir que la nueva contraseña maestra tenga una longitud mínima
-  de 12 caracteres. El rechazo por longitud ocurre en la validación del formulario, antes de
-  cualquier operación de re-cifrado, y va acompañado de un mensaje que indica la longitud mínima.
-
-- **FR-020**: El sistema DEBE mostrar un indicador de fortaleza de la nueva contraseña
-  (reutilizado del ciclo 001 si existe) mientras el usuario la escribe. El indicador es
-  puramente informativo: no bloquea el envío si se cumplen FR-018 y FR-019. No constituye un
-  requisito de fortaleza mínima adicional al de longitud.
-
 - **FR-006**: El sistema DEBE generar un salt criptográficamente aleatorio nuevo para cada
   rotación de contraseña maestra. Queda estrictamente prohibida la reutilización del salt anterior.
 
-- **FR-007**: El sistema DEBE re-cifrar la bóveda completa —todas las entradas y carpetas— bajo
-  la clave derivada de la nueva contraseña maestra y el salt nuevo. El contenido lógico de cada
-  entrada no se modifica; solo el cifrado que lo protege.
+- **FR-007**: El sistema DEBE re-cifrar la bóveda completa bajo la clave derivada de la nueva
+  contraseña maestra y el salt nuevo. El re-cifrado opera sobre el payload completo serializado
+  (un único blob JSON que contiene todas las entradas y carpetas), no entrada por entrada. El
+  contenido lógico de cada entrada no se modifica; solo el cifrado que lo protege.
 
 - **FR-008**: El sistema DEBE usar un nonce nuevo para la operación de re-cifrado (la unicidad del
   nonce respecto a la clave nueva es obligatoria).
@@ -292,6 +283,19 @@ archivo final con la contraseña anterior falle.
   alcance de este ciclo (clasificado como *Could* para un ciclo futuro independiente); la
   protección anti-degradación vía AAD (NFR-003) cubre el ataque de downgrade en la bóveda
   resultante.
+
+- **FR-018**: El sistema DEBE rechazar la nueva contraseña maestra si es idéntica a la
+  contraseña maestra actual. El rechazo ocurre en la validación del formulario, antes de
+  cualquier operación de re-cifrado, y va acompañado de un mensaje específico.
+
+- **FR-019**: El sistema DEBE exigir que la nueva contraseña maestra tenga una longitud mínima
+  de 12 caracteres. El rechazo por longitud ocurre en la validación del formulario, antes de
+  cualquier operación de re-cifrado, y va acompañado de un mensaje que indica la longitud mínima.
+
+- **FR-020**: El sistema DEBE mostrar un indicador de fortaleza de la nueva contraseña
+  (reutilizado del ciclo 001 si existe) mientras el usuario la escribe. El indicador es
+  puramente informativo: no bloquea el envío si se cumplen FR-018 y FR-019. No constituye un
+  requisito de fortaleza mínima adicional al de longitud.
 
 - **FR-021**: El sistema DEBE suspender el temporizador de auto-bloqueo por inactividad durante
   toda la operación de rotación (desde que el usuario confirma la nueva contraseña hasta que la

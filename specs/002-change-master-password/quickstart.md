@@ -127,6 +127,8 @@ uv run python -m vault_manager
 4. Verificar mensaje de éxito.
 5. Cerrar la aplicación; reabrir; introducir la nueva contraseña → bóveda abierta con entradas.
 6. Intentar abrir con la contraseña anterior → error de autenticación.
+7. Contar los pasos de interacción del escenario anterior (introducir maestra actual → introducir
+   nueva → confirmar nueva → pulsar "Confirmar" → ver resultado): no más de 5 · **SC-006**.
 
 ---
 
