@@ -270,6 +270,13 @@ class TestEntryCRUD:
         with pytest.raises(FolderNotFoundError):
             svc.update_entry(entry.id, folder_id="carpeta-inexistente")
 
+    def test_update_entry_ignores_disallowed_keys(self, svc_open):
+        """Campos no permitidos en update_entry se ignoran silenciosamente."""
+        svc, _ = svc_open
+        entry = svc.add_entry("Site", username="u")
+        svc.update_entry(entry.id, username="u2", campo_desconocido="valor")
+        assert entry.username == "u2"
+
     # ── delete_entry ─────────────────────────────────────────────────────────
 
     def test_delete_entry_removes_it(self, svc_open):
@@ -887,4 +894,527 @@ class TestAutoLock:
         svc.create_vault(vault_path, PASSWORD)
         assert svc._inactivity_timer is None
         assert svc.is_unlocked
+
+    def test_set_auto_lock_timeout_while_unlocked_restarts_timer(self, vault_path):
+        """set_auto_lock_timeout() mientras está desbloqueado reinicia el timer.
+
+        Ref: T039 — diálogo de configuración actualiza VaultService.
+        """
+        svc = VaultService(auto_lock_timeout_s=60)
+        svc.create_vault(vault_path, PASSWORD)
+        assert svc._inactivity_timer is not None
+
+        # Cambiar timeout mientras está desbloqueado
+        svc.set_auto_lock_timeout(120)
+        assert svc._auto_lock_timeout_s == 120
+        assert svc._inactivity_timer is not None  # timer reiniciado
+        svc.lock_vault()
+
+
+# ── T-R16 / T-R17: suspend_auto_lock / resume_auto_lock (T002) ───────────────
+
+
+class TestSuspendResumeAutoLock:
+    """T-R16 y T-R17 — suspend_auto_lock / resume_auto_lock.
+
+    Refs: FR-021, Phase 2 (T002), contracts/vault-service-interface.md.
+    """
+
+    _TIMEOUT = 0.25  # segundos — suficientemente largo para que el test sea fiable
+
+    @pytest.fixture
+    def svc_open(self, vault_path):
+        svc = VaultService(auto_lock_timeout_s=self._TIMEOUT)
+        svc.create_vault(vault_path, PASSWORD)
+        return svc
+
+    def test_T_R16_suspend_cancels_timer_without_locking(self, svc_open):
+        """T-R16: suspend_auto_lock() cancela el timer de inactividad sin
+        bloquear la sesión — la bóveda sigue desbloqueada más allá del timeout.
+
+        Ref: FR-021, contracts/vault-service-interface.md → suspend_auto_lock.
+        """
+        svc = svc_open
+        assert svc.is_unlocked, "pre: bóveda debe estar desbloqueada"
+        svc.suspend_auto_lock()
+        # El timer debe haber sido cancelado
+        assert svc._inactivity_timer is None, (
+            "suspend_auto_lock() debe cancelar el timer"
+        )
+        # Esperar más allá del timeout — la bóveda NO debe haberse bloqueado
+        time.sleep(self._TIMEOUT * 2)
+        assert svc.is_unlocked, (
+            "La bóveda NO debe bloquearse mientras el auto-bloqueo está suspendido"
+        )
+
+    def test_suspend_auto_lock_noop_when_locked(self, vault_path):
+        """suspend_auto_lock() es no-op si la bóveda está bloqueada.
+
+        Ref: FR-021 (no-op si bóveda bloqueada).
+        """
+        svc = VaultService(auto_lock_timeout_s=5)
+        svc.create_vault(vault_path, PASSWORD)
+        svc.lock_vault()
+        # No debe lanzar excepción ni modificar estado
+        svc.suspend_auto_lock()
+        assert not svc.is_unlocked
+        assert svc._inactivity_timer is None
+
+    def test_resume_auto_lock_noop_when_locked(self, vault_path):
+        """resume_auto_lock() es no-op si la bóveda está bloqueada.
+
+        Ref: FR-021 (no-op si bóveda bloqueada).
+        """
+        svc = VaultService(auto_lock_timeout_s=5)
+        svc.create_vault(vault_path, PASSWORD)
+        svc.lock_vault()
+        svc.resume_auto_lock()
+        assert not svc.is_unlocked
+        assert svc._inactivity_timer is None
+
+    def test_T_R17_resume_restarts_timer_from_zero(self, vault_path):
+        """T-R17: resume_auto_lock() reinicia el timer desde cero —
+        la bóveda NO se bloquea inmediatamente tras resume.
+
+        Ref: FR-021, contracts/vault-service-interface.md → resume_auto_lock.
+        """
+        svc = VaultService(auto_lock_timeout_s=self._TIMEOUT)
+        svc.create_vault(vault_path, PASSWORD)
+
+        svc.suspend_auto_lock()
+        time.sleep(self._TIMEOUT * 1.5)  # timer suspendido — sin bloqueo
+
+        svc.resume_auto_lock()
+        assert svc.is_unlocked, (
+            "La bóveda debe seguir desbloqueada inmediatamente después de resume_auto_lock()"
+        )
+        # El timer se ha reiniciado: debemos esperar TIMEOUT más para que bloquee
+        time.sleep(self._TIMEOUT * 0.5)
+        assert svc.is_unlocked, (
+            "La bóveda debe permanecer desbloqueada a mitad del nuevo intervalo"
+        )
+        # Esperar hasta que el timer recién iniciado dispare
+        deadline = time.perf_counter() + self._TIMEOUT + 0.5
+        while svc.is_unlocked and time.perf_counter() < deadline:
+            time.sleep(0.02)
+        assert not svc.is_unlocked, (
+            "La bóveda debe bloquearse tras el timeout completo desde resume_auto_lock()"
+        )
+
+
+# ── T-R01–T-R04, T-R11, T-R15, T-R20: change_master_password (T004,T005,T008,T009) ─
+
+
+NEW_PASSWORD = "NuevaContraseñaSegura456!"
+SHORT_PASSWORD = "corta123"       # 9 chars — menos de 12
+PASSWORD_11 = "once_chars1"       # exactamente 11 chars
+
+
+@pytest.fixture
+def svc_unlocked(tmp_path):
+    """VaultService con bóveda desbloqueada y una entrada."""
+    svc = VaultService(auto_lock_timeout_s=0)
+    path = tmp_path / "rotation.vault"
+    svc.create_vault(path, PASSWORD)
+    svc.add_entry("GitHub", username="alice", password="secreto")
+    return svc, path
+
+
+class TestChangeMasterPasswordUS1:
+    """T-R01, T-R02, T-R03, T-R04, T-R20 — US1: rotación exitosa.
+
+    Refs: FR-006, FR-008, FR-016, NFR-001, SC-001.
+    T004, T005.
+    """
+
+    def test_T_R01_new_salt_after_rotation(self, svc_unlocked):
+        """T-R01: el salt en metadatos es distinto al anterior tras la rotación.
+
+        Ref: FR-006, NFR-001.
+        """
+        svc, path = svc_unlocked
+        import json
+        salt_before = json.loads(path.read_text())["salt"]
+
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        salt_after = json.loads(path.read_text())["salt"]
+        assert salt_before != salt_after, (
+            "El salt debe ser nuevo tras la rotación (FR-006)"
+        )
+
+    def test_T_R02_unlock_with_new_password(self, svc_unlocked):
+        """T-R02: unlock_vault con la nueva contraseña abre la bóveda con entradas intactas.
+
+        Ref: SC-001, FR-008.
+        """
+        svc, path = svc_unlocked
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+        svc.lock_vault()
+
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        svc2.unlock_vault(path, NEW_PASSWORD)
+        assert svc2.is_unlocked
+        entries = svc2.get_entries()
+        assert len(entries) == 1
+        assert entries[0].title == "GitHub"
+
+    def test_T_R03_old_password_rejected_after_rotation(self, svc_unlocked):
+        """T-R03: unlock_vault con la contraseña anterior lanza WrongPasswordError.
+
+        Ref: SC-001, FR-008.
+        """
+        svc, path = svc_unlocked
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+        svc.lock_vault()
+
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(WrongPasswordError):
+            svc2.unlock_vault(path, PASSWORD)
+
+    def test_T_R20_nonce_differs_after_rotation(self, svc_unlocked):
+        """T-R20: el nonce en el archivo difiere antes y después de la rotación.
+
+        Ref: NFR-001, FR-008 — nonce único por llave.
+        """
+        import json
+        svc, path = svc_unlocked
+        nonce_before = json.loads(path.read_text())["nonce"]
+
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        nonce_after = json.loads(path.read_text())["nonce"]
+        assert nonce_before != nonce_after, (
+            "El nonce debe ser nuevo tras la rotación (NFR-001)"
+        )
+
+    def test_T_R04_session_unlocked_with_new_key(self, svc_unlocked):
+        """T-R04: tras change_master_password exitoso, is_unlocked es True y
+        la sesión contiene la llave nueva (distinta de la antigua).
+
+        Ref: FR-016.
+        """
+        svc, path = svc_unlocked
+        old_key_bytes = bytes(svc._session.derived_key)  # copia para comparar
+
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        assert svc.is_unlocked, "La sesión debe permanecer desbloqueada (FR-016)"
+        new_key_bytes = bytes(svc._session.derived_key)
+        assert old_key_bytes != new_key_bytes, (
+            "La llave en sesión debe ser la nueva, distinta de la antigua (FR-016)"
+        )
+
+
+class TestChangeMasterPasswordUS2:
+    """T-R11, T-R15 — US2: re-autenticación explícita.
+
+    Refs: FR-001, FR-002, FR-003, FR-004, NFR-007, SC-003.
+    T008, T009.
+    """
+
+    def test_T_R11_wrong_current_password(self, svc_unlocked):
+        """T-R11: contraseña actual incorrecta lanza WrongPasswordError con
+        mensaje específico y el archivo permanece byte a byte idéntico.
+
+        Ref: FR-003, FR-004, NFR-007, SC-003.
+        """
+        import json
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        with pytest.raises(WrongPasswordError) as exc_info:
+            svc.change_master_password("contraseña_incorrecta", NEW_PASSWORD)
+
+        assert exc_info.value.args[0] == "Contraseña maestra actual incorrecta.", (
+            "El mensaje debe ser específico para re-auth (NFR-007)"
+        )
+        assert path.read_bytes() == content_before, (
+            "El archivo debe permanecer byte a byte idéntico (FR-004)"
+        )
+
+    def test_T_R15a_locked_vault_raises_VaultLockedError(self, tmp_path):
+        """T-R15a: change_master_password con bóveda bloqueada lanza VaultLockedError.
+
+        Ref: FR-001, FR-002.
+        """
+        svc = VaultService(auto_lock_timeout_s=0)
+        path = tmp_path / "locked.vault"
+        svc.create_vault(path, PASSWORD)
+        svc.lock_vault()
+
+        with pytest.raises(VaultLockedError):
+            svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+    def test_T_R15b_empty_current_password_raises_before_reencrypt(self, svc_unlocked):
+        """T-R15b: current_password vacío lanza WrongPasswordError antes de
+        cualquier operación de re-cifrado — no puede omitir re-autenticación.
+
+        Ref: FR-002.
+        """
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        with pytest.raises(WrongPasswordError):
+            svc.change_master_password("", NEW_PASSWORD)
+
+        assert path.read_bytes() == content_before, (
+            "El archivo no debe modificarse cuando la re-autenticación falla"
+        )
+
+
+class TestChangeMasterPasswordUS3:
+    """T-R07–T-R10, T-R13 (autolock) — US3: atomicidad y consistencia.
+
+    Refs: FR-009–FR-012, NFR-002–NFR-003, SC-002, SC-004.
+    T010, T011, T012, T013.
+    """
+
+    def test_T_R07_interrupted_before_commit_leaves_original_intact(self, svc_unlocked, monkeypatch):
+        """T-R07: si os.replace falla, el archivo original permanece intacto
+        y sigue siendo descifrable con la contraseña anterior; sin residuos.
+
+        Ref: NFR-002, FR-011, FR-012, SC-002.
+        """
+        import os as _os
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        real_replace = _os.replace
+
+        def fail_replace(src, dst):
+            raise OSError("Disco lleno simulado")
+
+        monkeypatch.setattr(_os, "replace", fail_replace)
+
+        with pytest.raises(OSError):
+            svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        monkeypatch.setattr(_os, "replace", real_replace)
+
+        # Archivo original intacto
+        assert path.read_bytes() == content_before, (
+            "El archivo original debe permanecer intacto cuando os.replace falla"
+        )
+        # Sin archivos temporales residuales
+        tmp_files = list(path.parent.glob("*.tmp")) + list(path.parent.glob("*.part"))
+        assert tmp_files == [], f"No deben quedar archivos temporales: {tmp_files}"
+
+        # Sigue siendo descifrable con contraseña anterior
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        svc2.unlock_vault(path, PASSWORD)
+        assert svc2.is_unlocked
+
+    def test_T_R08_post_commit_file_decryptable_with_new_password(self, svc_unlocked, monkeypatch):
+        """T-R08: después del commit (os.replace) el archivo es descifrable
+        con la nueva contraseña aunque la actualización de sesión falle.
+
+        Ref: NFR-002, SC-002.
+        """
+        import os as _os
+        svc, path = svc_unlocked
+
+        real_replace = _os.replace
+        committed = []
+
+        def recording_replace(src, dst):
+            real_replace(src, dst)
+            committed.append(True)
+
+        monkeypatch.setattr(_os, "replace", recording_replace)
+
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        assert committed, "os.replace debe haberse llamado (commit)"
+        # El archivo en disco es descifrable con la nueva contraseña
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        svc2.unlock_vault(path, NEW_PASSWORD)
+        assert svc2.is_unlocked
+
+    def test_T_R09_tampered_kdf_params_fails_decryption(self, svc_unlocked):
+        """T-R09: modificar kdf_params en el archivo re-cifrado causa fallo GCM
+        al desbloquear (AAD re-vinculada a metadatos).
+
+        Ref: NFR-003, FR-009, SC-004.
+        """
+        import json
+        svc, path = svc_unlocked
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        # Modificar memory_cost en el archivo
+        data = json.loads(path.read_text())
+        data["kdf_params"]["memory_cost"] = 1  # valor inválido
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(WrongPasswordError):
+            svc2.unlock_vault(path, NEW_PASSWORD)
+
+    def test_T_R10_tampered_salt_fails_decryption(self, svc_unlocked):
+        """T-R10: modificar el campo salt en los metadatos causa fallo GCM al
+        desbloquear (AAD re-vinculada al salt).
+
+        Ref: NFR-003, FR-009, SC-004.
+        """
+        import base64
+        import json
+        svc, path = svc_unlocked
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        # Reemplazar salt por bytes aleatorios distintos
+        data = json.loads(path.read_text())
+        fake_salt = base64.b64encode(b"\xde\xad\xbe\xef" * 4).decode("ascii")
+        data["salt"] = fake_salt
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(WrongPasswordError):
+            svc2.unlock_vault(path, NEW_PASSWORD)
+
+    def test_T_R13_autolock_suspended_during_rotation_window(self, tmp_path):
+        """T-R13: configurar VaultService con timeout corto; suspend_auto_lock()
+        evita el bloqueo; resume_auto_lock() reinicia el timer desde cero.
+
+        Ref: FR-021, US3 Ac. Sc. 5. Depends on T003.
+        """
+        TIMEOUT = 0.30
+        svc = VaultService(auto_lock_timeout_s=TIMEOUT)
+        path = tmp_path / "autolock.vault"
+        svc.create_vault(path, PASSWORD)
+
+        svc.suspend_auto_lock()
+        time.sleep(TIMEOUT * 1.5)  # esperamos más allá del timeout
+        assert svc.is_unlocked, "La bóveda no debe bloquearse mientras está suspendida"
+
+        svc.resume_auto_lock()
+        # Inmediatamente después del resume, la bóveda sigue abierta
+        assert svc.is_unlocked
+
+        # Esperar el timeout completo desde el resume
+        deadline = time.perf_counter() + TIMEOUT + 0.5
+        while svc.is_unlocked and time.perf_counter() < deadline:
+            time.sleep(0.02)
+        assert not svc.is_unlocked, (
+            "La bóveda debe bloquearse tras el timeout completo desde resume_auto_lock()"
+        )
+
+
+class TestChangeMasterPasswordUS5:
+    """T-R05, T-R06 — US5: higiene de memoria y ausencia de residuos.
+
+    Refs: NFR-004, NFR-005, FR-012, FR-013, FR-014, SC-005.
+    T014, T015.
+    """
+
+    def test_T_R05_old_key_zeroed_on_original_bytearray(self, svc_unlocked):
+        """T-R05: el zeroing actúa sobre el bytearray ORIGINAL de session.derived_key.
+
+        Guardar referencia ANTES de la rotación; después verificar que todos los
+        bytes son cero — confirma que se zerorizó el objeto original, no una copia.
+
+        Ref: NFR-004, FR-013, SC-005.
+        """
+        svc, path = svc_unlocked
+        # Referencia al bytearray original (no copia)
+        old_key_ref = svc._session.derived_key
+
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        assert all(b == 0 for b in old_key_ref), (
+            "El zeroing debe afectar al bytearray original, no a una copia (NFR-004)"
+        )
+
+    def test_T_R06_no_residual_files_after_rotation(self, svc_unlocked):
+        """T-R06a: tras rotación exitosa no quedan archivos temporales y la bóveda
+        no es descifrable con la contraseña antigua.
+
+        Ref: NFR-005, FR-012, FR-014, SC-005.
+        """
+        svc, path = svc_unlocked
+        svc.change_master_password(PASSWORD, NEW_PASSWORD)
+
+        # Sin archivos temporales
+        tmp_files = (
+            list(path.parent.glob("*.tmp"))
+            + list(path.parent.glob("*.part"))
+            + [f for f in path.parent.iterdir() if f != path and f.is_file()]
+        )
+        assert tmp_files == [], f"No deben quedar archivos residuales: {tmp_files}"
+
+        # La vieja contraseña ya no abre la bóveda
+        svc2 = VaultService(auto_lock_timeout_s=0)
+        with pytest.raises(WrongPasswordError):
+            svc2.unlock_vault(path, PASSWORD)
+
+    def test_T_R06b_no_residual_files_after_failed_rotation(self, svc_unlocked):
+        """T-R06b: tras rotación fallida (contraseña incorrecta) no quedan
+        archivos temporales.
+
+        Ref: NFR-005, FR-012, SC-005.
+        """
+        svc, path = svc_unlocked
+
+        with pytest.raises(WrongPasswordError):
+            svc.change_master_password("incorrecta", NEW_PASSWORD)
+
+        tmp_files = (
+            list(path.parent.glob("*.tmp"))
+            + list(path.parent.glob("*.part"))
+        )
+        assert tmp_files == [], f"No deben quedar archivos temporales tras fallo: {tmp_files}"
+
+
+class TestChangeMasterPasswordUS4:
+    """T-R12, T-R13, T-R14 — US4: validación de la nueva contraseña.
+
+    Refs: FR-005, FR-018, FR-019.
+    T016, T017.
+    """
+
+    def test_T_R12_identical_passwords_raises_ValueError(self, svc_unlocked):
+        """T-R12: change_master_password(current, current) lanza ValueError
+        indicando identidad, sin derivar ninguna clave nueva.
+
+        Ref: FR-018, US4 Ac. Sc. 4.
+        """
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        with pytest.raises(ValueError, match="idéntica|identical|igual|same"):
+            svc.change_master_password(PASSWORD, PASSWORD)
+
+        assert path.read_bytes() == content_before, (
+            "El archivo no debe modificarse al rechazar contraseña idéntica"
+        )
+
+    def test_T_R13_short_new_password_raises_ValueError(self, svc_unlocked):
+        """T-R13: nueva contraseña de 11 caracteres lanza ValueError con
+        mención de 12 caracteres mínimos.
+
+        Ref: FR-019, US4 Ac. Sc. 5.
+        """
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        with pytest.raises(ValueError, match="12"):
+            svc.change_master_password(PASSWORD, PASSWORD_11)
+
+        assert path.read_bytes() == content_before, (
+            "El archivo no debe modificarse al rechazar contraseña corta"
+        )
+
+    def test_T_R14_empty_new_password_raises_ValueError(self, svc_unlocked):
+        """T-R14: nueva contraseña vacía lanza ValueError; disco sin modificar.
+
+        Ref: FR-005, US4 Ac. Sc. 2.
+        """
+        svc, path = svc_unlocked
+        content_before = path.read_bytes()
+
+        with pytest.raises(ValueError):
+            svc.change_master_password(PASSWORD, "")
+
+        assert path.read_bytes() == content_before, (
+            "El archivo no debe modificarse cuando new_password está vacío"
+        )
 

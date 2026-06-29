@@ -132,3 +132,65 @@ def test_fresh_nonce_different_from_original_after_save(vault_path):
     assert nonce_original != nonce_after_save, (
         "_save() debe generar un nonce fresco en cada llamada"
     )
+
+
+# ── T-R18 / T-R19: rotation roundtrip (T006) ─────────────────────────────────
+
+NEW_PASSWORD = "NuevaContraseñaSegura456!"
+
+
+def test_T_R18_full_rotation_roundtrip(vault_path):
+    """T-R18: crear bóveda → añadir entradas → rotar → cerrar →
+    reabrir con nueva maestra → verificar entradas.
+
+    Refs: NFR-001, SC-001, FR-017 (kdf_params preservados).
+    """
+    svc = VaultService(auto_lock_timeout_s=0)
+    svc.create_vault(vault_path, PASSWORD)
+    svc.add_entry("GitHub", username="alice", password="s3cr3t")
+    svc.add_entry("Gmail", username="bob")
+
+    # Rotar
+    svc.change_master_password(PASSWORD, NEW_PASSWORD)
+    svc.lock_vault()
+
+    # Reabrir con la nueva contraseña
+    svc2 = VaultService(auto_lock_timeout_s=0)
+    svc2.unlock_vault(vault_path, NEW_PASSWORD)
+    assert svc2.is_unlocked
+
+    entries = svc2.get_entries()
+    assert len(entries) == 2
+    titles = {e.title for e in entries}
+    assert titles == {"GitHub", "Gmail"}
+
+    # kdf_params preservados (FR-017)
+    data = json.loads(vault_path.read_text())
+    assert data["kdf_params"]["time_cost"] == 3
+    assert data["kdf_params"]["memory_cost"] == 65536
+    assert data["kdf_params"]["parallelism"] == 1
+    assert data["kdf_params"]["hash_len"] == 32
+
+
+def test_T_R19_double_rotation_produces_distinct_salts(vault_path):
+    """T-R19: doble rotación consecutiva — los dos salts generados son distintos
+    entre sí y distintos al original.
+
+    Refs: NFR-001, SC-001.
+    """
+    svc = VaultService(auto_lock_timeout_s=0)
+    svc.create_vault(vault_path, PASSWORD)
+    salt_original = json.loads(vault_path.read_text())["salt"]
+
+    PASSWORD2 = "SegundaContraseña789!"
+    PASSWORD3 = "TerceraContraseñaAAA!"
+
+    svc.change_master_password(PASSWORD, PASSWORD2)
+    salt_after_first = json.loads(vault_path.read_text())["salt"]
+
+    svc.change_master_password(PASSWORD2, PASSWORD3)
+    salt_after_second = json.loads(vault_path.read_text())["salt"]
+
+    assert salt_original != salt_after_first, "Primera rotación debe generar salt nuevo"
+    assert salt_original != salt_after_second, "Segunda rotación debe generar salt distinto al original"
+    assert salt_after_first != salt_after_second, "Dos rotaciones distintas deben generar salts distintos"

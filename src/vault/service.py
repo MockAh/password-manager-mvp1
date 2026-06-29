@@ -14,6 +14,7 @@ Constitución:
   Principio VI — zeroing de clave derivada al bloquear.
 """
 import base64
+import hmac
 import json
 import threading
 from pathlib import Path
@@ -234,6 +235,148 @@ class VaultService:
         return self._session is not None
 
     # ── Gestión de actividad / auto-bloqueo ───────────────────────────────────
+
+    def suspend_auto_lock(self) -> None:
+        """Suspende el temporizador de auto-bloqueo por inactividad.
+
+        El temporizador se cancela; la sesión permanece abierta.
+        Llamar antes de iniciar la operación de rotación (FR-021).
+        No-op si el auto-bloqueo está desactivado (timeout == 0).
+        No-op si la bóveda está bloqueada.
+        """
+        if self._session is None:
+            return
+        self._cancel_inactivity_timer()
+
+    def resume_auto_lock(self) -> None:
+        """Reanuda el temporizador de auto-bloqueo desde cero.
+
+        Llamar al completar la operación de rotación (con éxito o fallo).
+        Equivale a un reset del temporizador de inactividad.
+        No-op si el auto-bloqueo está desactivado (timeout == 0).
+        No-op si la bóveda está bloqueada.
+        """
+        if self._session is None:
+            return
+        self._cancel_inactivity_timer()
+        self._start_inactivity_timer()
+
+    def change_master_password(
+        self,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        """Rota la contraseña maestra de la bóveda abierta.
+
+        Ver contrato completo en specs/002-change-master-password/contracts/vault-service-interface.md.
+
+        Raises:
+            VaultLockedError: Si la bóveda no está desbloqueada.
+            WrongPasswordError: Si current_password no coincide con la maestra actual.
+            ValueError: Si new_password es vacío, tiene < 12 caracteres, o es
+                        idéntico a current_password.
+            OSError: Si falla la escritura atómica en disco.
+        """
+        # Memory hygiene — known limitations (T023 — research.md §7)
+        # ─────────────────────────────────────────────────────────────────────
+        # (a) Los objetos str en CPython son inmutables — no es posible
+        #     sobreescribir current_password ni new_password. Se mitiga liberando
+        #     las referencias locales en cuanto salen de scope y no almacenando
+        #     las contraseñas en atributos de instancia.
+        # (b) Los buffers internos de la biblioteca Argon2 (C) quedan fuera
+        #     de nuestro control y no son accesibles desde Python.
+        # (c) El zeroing de bytearray de clave (pasos 4 y 10 abajo) es efectivo
+        #     porque derive_key() devuelve bytearray mutable — nunca copiar la
+        #     llave a bytes antes de zeroizar.
+        # (d) El diálogo de cambio de contraseña suspende el auto-bloqueo durante
+        #     la operación activa; si el usuario abandona sin pulsar "Confirmar",
+        #     el timer corre con normalidad.
+        # ─────────────────────────────────────────────────────────────────────
+
+        # (1) Requiere bóveda desbloqueada
+        session = self._require_unlocked()
+
+        # (2) Validaciones baratas de new_password — antes de cualquier KDF
+        # Orden de validación (auditabilidad — data-model.md §Reglas de validación):
+        #   1. vacío      → ValueError (sin KDF)
+        #   2. longitud < 12 → ValueError (sin KDF)
+        #   3. identidad  → ValueError (sin KDF, current == new detectable sin derivar)
+        #   4. re-autenticación Argon2id → WrongPasswordError (opera sobre current)
+        # Esta secuencia garantiza que las validaciones baratas preceden a la KDF.
+        if not new_password:
+            raise ValueError("La nueva contraseña no puede estar vacía.")
+        if len(new_password) < 12:
+            raise ValueError(
+                "La nueva contraseña debe tener al menos 12 caracteres."
+            )
+        if new_password == current_password:
+            raise ValueError(
+                "La nueva contraseña es idéntica a la actual. Elige una diferente."
+            )
+
+        # (3) Re-autenticación explícita en memoria: derivar con salt actual
+        # y comparar con compare_digest en tiempo constante (FR-003).
+        candidate_key = derive_key(
+            current_password, base64.b64decode(session.salt_b64)
+        )
+        try:
+            if not hmac.compare_digest(
+                bytes(candidate_key), bytes(session.derived_key)
+            ):
+                raise WrongPasswordError("Contraseña maestra actual incorrecta.")
+        finally:
+            # (4) Zeroing del candidato en el finally — siempre, sea éxito o error
+            for i in range(len(candidate_key)):
+                candidate_key[i] = 0
+
+        # (5) Generar nuevo salt y (6) derivar nueva llave con los mismos kdf_params
+        new_salt = generate_salt()
+        new_salt_b64 = base64.b64encode(new_salt).decode("ascii")
+        new_key = derive_key(new_password, new_salt)  # mismos kdf_params (FR-017)
+
+        try:
+            # (7) Construir nuevos metadatos del envelope con el salt nuevo
+            new_envelope_meta = {
+                "version": VAULT_FORMAT_VERSION,
+                "kdf": VAULT_KDF,
+                "kdf_params": dict(session.kdf_params),  # preservar FR-017
+                "salt": new_salt_b64,
+            }
+
+            # Serializar el payload actual (no cambia, solo se re-cifra)
+            plaintext = json.dumps(
+                session.payload.to_dict(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+            # (8) Re-cifrar con llave nueva, nonce nuevo, AAD re-vinculada
+            nonce, ciphertext_with_tag = encrypt(plaintext, new_key, new_envelope_meta)
+
+            vault_data = {
+                **new_envelope_meta,
+                "nonce": base64.b64encode(nonce).decode("ascii"),
+                "ciphertext": base64.b64encode(ciphertext_with_tag).decode("ascii"),
+            }
+
+            # (9) Persistencia atómica (os.replace interno)
+            repository.save_vault_file(session.vault_file_path, vault_data)
+
+        except Exception:
+            # En excepción post-paso-6: zeroing de new_key en finally
+            for i in range(len(new_key)):
+                new_key[i] = 0
+            raise
+
+        # (10) Zeroing de la llave antigua — actúa sobre el bytearray ORIGINAL
+        # de session.derived_key (no una copia), antes de reasignar.
+        old_key = session.derived_key
+        for i in range(len(old_key)):
+            old_key[i] = 0
+
+        # (11) Actualizar sesión con la nueva llave y nuevo salt
+        session.derived_key = new_key
+        session.salt_b64 = new_salt_b64
 
     def record_activity(self) -> None:
         """Reinicia el temporizador de inactividad.

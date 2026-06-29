@@ -78,6 +78,18 @@ class MainView(tk.Frame):
             padx=8,
         ).pack(side=tk.RIGHT, padx=(4, 0))
 
+        # Botón "Cambiar contraseña maestra…" (T022 — FR-001, US1 Ac. Sc. 1)
+        # Solo visible en MainView (bóveda desbloqueada); no aparece en UnlockView
+        # ni en CreateVaultView.
+        tk.Button(
+            action_bar,
+            text="🔑 Cambiar maestra…",
+            command=self._open_change_password_dialog,
+            cursor="hand2",
+            relief="flat",
+            padx=8,
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+
         self._delete_btn = tk.Button(
             action_bar,
             text="🗑 Eliminar",
@@ -604,4 +616,14 @@ class MainView(tk.Frame):
         self._delete_btn.config(state=state)
         self._copy_user_btn.config(state=state)
         self._copy_pwd_btn.config(state=state)
+
+    def _open_change_password_dialog(self) -> None:
+        """Abre el diálogo modal de cambio de contraseña maestra (T022).
+
+        Instancia ChangePasswordDialog y llama a grab_set() para hacerlo modal.
+        Solo accesible desde MainView (bóveda desbloqueada) — FR-001.
+        """
+        from ui.views.change_password_dialog import ChangePasswordDialog
+        dialog = ChangePasswordDialog(parent=self, app=self._app)
+        dialog.grab_set()
 
